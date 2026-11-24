@@ -2,15 +2,22 @@
 
 Flow Studio 用于编排和运行 RGB 视频里的手、物实例分割流水线。你可以拖动算子、选择服务器数据集、提交任务，也可以查看算子进度、处理队列和全视频掩码融合结果。
 
-## 1. 选择启动方式
+## 1. Windows 总入口
 
-| 我想做什么 | Windows 入口 | 打开后可以做什么 |
-| --- | --- | --- |
-| 查看现有 amax 任务 | [open-amax-monitor.cmd](flow-studio/open-amax-monitor.cmd) | 只读查看同一份运行监控和数据排队。使用自己的 amax 账号，需由工作台管理员授予只读访问。 |
-| 编辑编排或启动 amax 任务 | [open-amax.cmd](flow-studio/open-amax.cmd) | 通过 SSH 别名 `5090` 连接已部署工作台。使用具有工作台管理权限的账号，本机需要 Python。 |
-| 在自己电脑上编辑或演练 | [open-workbench.cmd](flow-studio/open-workbench.cmd) | 启动本机界面，默认地址为 `http://127.0.0.1:8766/`。本机编排和浏览器演练独立保存。 |
+克隆完整仓库或解压仓库 ZIP 后，双击根目录的 [open-flow-studio.cmd](open-flow-studio.cmd)。它会打开**自己的 amax 工作台**，同一个网页里可以编排、编辑 Python 算子、启动任务并查看监控和队列。Windows 需要 Python 3 和 OpenSSH 客户端；首次使用先完成下面的个人部署。
 
-### Windows 只读连接
+在 Windows 的 `%USERPROFILE%\.ssh\config` 中配置一次个人 SSH 别名。
+
+```sshconfig
+Host amax-workbench
+    HostName <amax SSH 主机名>
+    Port <amax SSH 端口>
+    User <自己的 amax 账号>
+```
+
+默认连接服务器的 `/home/<账号>/DataFlow`，本机地址为 [http://127.0.0.1:18766/](http://127.0.0.1:18766/)。保留启动窗口以维持连接。已有 `5090` SSH 别名的原部署可以沿用原来的配置。如果账号家目录的位置不同，在 Windows 终端运行 `open-flow-studio.cmd --server-root /实际路径/DataFlow`。
+
+### 查看别人分享的工作台
 
 1. 确认系统已安装 **OpenSSH 客户端**，在 `%USERPROFILE%\.ssh\config` 添加下面的配置。主机和端口由工作台管理员提供，`User` 写你自己的、已开通权限的 amax 账号。
 
@@ -32,7 +39,51 @@ Flow Studio 用于编排和运行 RGB 视频里的手、物实例分割流水线
 ssh -N -L 127.0.0.1:18768:/tmp/flow-studio-yanghonglei-monitor/monitor.sock amax-monitor
 ```
 
-## 2. 认识视频分割算子
+只在电脑上编辑和演练时，也可使用 [open-workbench.cmd](flow-studio/open-workbench.cmd)，编排和浏览器演练记录保存在本机。
+
+## 2. 独立部署和协作
+
+### 各自部署到 amax
+
+先在 GitHub Fork 仓库，再用自己的 amax 账号克隆并安装工作台。把 `YOUR_USERNAME` 换成你的 GitHub 用户名。
+
+```bash
+git clone https://github.com/YOUR_USERNAME/dataflow-flow-studio.git
+cd dataflow-flow-studio
+bash flow-studio/install-amax.sh
+```
+
+安装脚本部署到本账号的 `$HOME/DataFlow`，安装 DataFlow 和融合所用的 Python 依赖，并启动该账号的 systemd 用户服务。编排与草稿、算子代码快照和队列在该账号的工作台目录里，运行输出在该账号的 `DataFlow/dataflow_output/`。每个人操作自己的实例。
+
+正式跑视频前，需要备齐该账号可用的模型和服务依赖。全流程使用的默认目录如下：
+
+| 用途 | 在 amax 上准备 |
+| --- | --- |
+| RGB 数据集 | 个人数据集默认在 `$HOME/datasets`。可通过用户服务的 `FLOW_STUDIO_DATASETS_ROOT` 指定自己有权访问的目录，或在界面下拉框选择已登记的共享数据集。 |
+| Qwen 提词和改写 | `$HOME/qwen38-fp8/` 中放置 Qwen 运行脚本、Python 环境、`env.sh` 和指向可访问权重的 `model_path.txt`。 |
+| GenCeption 和 UMT5 | 准备 `$HOME/.venv-genception14b/`、`$HOME/genception14b_dexycb_141754_handonly/`、`$HOME/pipe_14b_v2.pkl` 和 `$HOME/umt5-xxl-encoder-bf16-dataflow/`。 |
+| ABS 评分 | 准备 `$HOME/scoring_scripts/abs/` 的评分程序和本人可用的 API 配置，在 `~/.config/flow-studio/agent.env` 设置配置指定的密钥变量。 |
+| 算子 Agent（可选） | 有个人 API 配置后，在 `$HOME/DataFlow` 运行 `.venv/bin/python -B flow-studio/operator_agent.py --install "$PWD"` 安装 Writer。 |
+
+用「选择数据集」先做输入预检，再提交一条短序列测试。个人环境配置变化后，用 `systemctl --user restart flow-studio.service` 重启自己的服务。若个人 API 需要经 Windows 反向转发，使用独立的远端回环端口配置个人服务，再用总入口的 `--abs-relay 127.0.0.1:远端端口:API主机:API端口` 选项连接。
+
+两套应用仍共用 amax 的物理显卡。当前视频流程会用到同一对 GPU，正式推理需错开执行。
+
+### 通过 PR 共享改动
+
+在自己的 Fork 和功能分支里修改源码，测试后推到自己的 Fork，再向上游开 PR。若是在网页里试改算子，先把验证过的代码整理回 Fork 的源码文件再提交。编排草稿、API 配置、数据集和模型输出留在个人运行环境。
+
+```bash
+git switch -c feat/my-operator
+# 修改并验证后，只暂存要分享的源文件
+git add <修改的源码文件>
+git commit -m "Update video operator"
+git push -u origin feat/my-operator
+```
+
+在 GitHub 从自己的分支发起 PR。PR 合并后，各自选择何时拉取并用安装脚本更新自己的工作台。
+
+## 3. 认识视频分割算子
 
 | 算子 | 输入与输出 | 调用模型 |
 | --- | --- | --- |
@@ -47,7 +98,7 @@ ssh -N -L 127.0.0.1:18768:/tmp/flow-studio-yanghonglei-monitor/monitor.sock amax
 
 工作台也提供 **Python 记录算子**、**数据转换**和**记录筛选**，用于读取或写入 JSONL 记录。Python 记录算子调用的模型由其代码决定，内置转换和筛选无需模型。
 
-## 3. 提交任务和查看结果
+## 4. 提交任务和查看结果
 
 ### 启动服务器任务
 
@@ -74,7 +125,7 @@ ssh -N -L 127.0.0.1:18768:/tmp/flow-studio-yanghonglei-monitor/monitor.sock amax
 
 如果初轮 ABS 因暂时性的 API 问题失败，且任务详情显示「继续执行」，可以从原检查点续跑。符合条件的续跑会复用已经保存的提词和分割成果，沿用当时选择的目标与流水线。
 
-## 4. 编辑流水线和算子
+## 5. 编辑流水线和算子
 
 1. 在「编排设计」中，从算子库拖入已有算子，连接输入、输出和分支。
 2. 点击算子或画布节点，可以查看输入、输出、处理逻辑和模型，并编辑节点说明或参数。支持自定义代码的节点可以直接编辑 Python。
