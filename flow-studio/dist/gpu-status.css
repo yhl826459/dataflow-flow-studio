@@ -1,0 +1,32 @@
+.gpu-dialog { width: min(820px, 94vw); }
+.gpu-dialog .dialoghead h2 { display: flex; align-items: center; gap: 9px; }
+.gpu-dialog .dialoghead svg { color: var(--teal); }
+.gpu-content { max-height: 63vh; overflow: auto; background: #f7f9f5; }
+.gpu-cards { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(min(285px, 100%), 1fr)); padding: 16px; }
+.gpu-cards:empty { padding: 0; }
+.gpu-card { min-width: 0; padding: 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--white); }
+.gpu-card-head { display: grid; gap: 6px; margin-bottom: 16px; }
+.gpu-index { font-size: 12px; font-weight: 650; letter-spacing: .05em; color: var(--teal); }
+.gpu-card h3 { font-size: 17px; line-height: 1.3; margin: 0; }
+.gpu-metric { display: grid; grid-template-columns: 1fr auto; align-items: baseline; gap: 4px; margin-top: 10px; }
+.gpu-metric > span { color: var(--muted); font-size: 13px; }
+.gpu-metric strong { font-size: 13px; font-variant-numeric: tabular-nums; }
+.gpu-metric progress { appearance: none; grid-column: 1/-1; display: block; width: 100%; height: 5px; border: 0; border-radius: 5px; overflow: hidden; background: #e5ede7; color: #26846d; }
+.gpu-metric progress::-webkit-progress-bar { background: #e5ede7; }
+.gpu-metric progress::-webkit-progress-value { background: #26846d; }
+.gpu-metric progress::-moz-progress-bar { background: #26846d; }
+.gpu-procs { border-top: 1px solid var(--line); margin-top: 14px; padding-top: 10px; }
+.gpu-procs h4 { margin: 0 0 5px; font-size: 13px; }
+.gpu-procs p { margin: 0; color: var(--muted); font-size: 12px; }
+.gpu-procs table { border-collapse: collapse; width: 100%; font-size: 12px; font-variant-numeric: tabular-nums; }
+.gpu-procs th, .gpu-procs td { padding: 4px 5px 4px 0; text-align: left; }
+.gpu-procs th { color: var(--muted); font-weight: 500; }
+.gpu-procs tr > :last-child { text-align: right; white-space: nowrap; }
+.gpu-process-name { overflow-wrap: anywhere; }
+.gpu-warning { background: #fff4de; color: #795520; padding: 9px 12px; margin: 13px 16px; border-radius: 5px; }
+.gpu-dialog footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 18px; border-top: 1px solid var(--line); }
+.gpu-dialog footer span { color: var(--muted); font-size: 12px; }
+@media (max-width: 600px) {
+  .gpu-cards { padding: 10px; gap: 8px; }
+  .gpu-content { max-height: 66vh; }
+}

@@ -1,0 +1,15 @@
+[Unit]
+Description=DataFlow pipeline workbench
+
+[Service]
+Type=simple
+WorkingDirectory=/data/yanghonglei/DataFlow/flow-studio
+EnvironmentFile=-%h/.config/flow-studio/agent.env
+ExecStart=/usr/bin/python3 -B /data/yanghonglei/DataFlow/flow-studio/local_server.py --dataflow-root /data/yanghonglei/DataFlow --unix-socket /data/yanghonglei/DataFlow/flow-studio/.local/workbench.sock
+Restart=on-failure
+RestartSec=3
+# Pipeline processes started by the user can outlive a workbench restart.
+KillMode=process
+
+[Install]
+WantedBy=default.target

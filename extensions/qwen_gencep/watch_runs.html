@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DataFlow 运行监控</title>
+<style>
+:root {
+  color-scheme: light; --ink: #1b2a2b; --muted: #526765; --line: #dce6e1;
+  --green: #146851; --wash: #e7f5ee; --surface: #fff; --page: #f3f6f4;
+  font-family: system-ui, "Microsoft YaHei", sans-serif;
+}
+* { box-sizing: border-box; }
+body { margin: 0; color: var(--ink); background: var(--page); }
+header { color: #eff9f4; background: #173b34; border-bottom: 4px solid #6ac096; }
+.bar, main { max-width: 1180px; padding: 0 28px; margin: 0 auto; }
+.bar { min-height: 92px; display: flex; gap: 20px; align-items: center; justify-content: space-between; }
+h1 { font-size: clamp(23px, 4vw, 34px); margin: 0; letter-spacing: -.035em; }
+h2, p { margin: 0; }
+h2 { font-size: 17px; }
+main { padding-top: 28px; padding-bottom: 44px; }
+.controls, .summary, .round { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; }
+.controls { display: flex; align-items: center; gap: 14px; padding: 14px 19px; }
+label { flex-shrink: 0; font-weight: 650; font-size: 14px; }
+select { font: inherit; border: 1px solid #c3d4cb; background: #f4f8f6; border-radius: 8px; min-width: 0;
+  max-width: 620px; flex: 1; color: var(--ink); padding: 8px 10px; }
+select:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+.summary, .empty { margin-top: 14px; padding: 20px; }
+.summary-top, .round-title { display: flex; gap: 12px; align-items: center; justify-content: space-between; }
+.summary h2 { overflow-wrap: anywhere; }
+.meta, .sub, .path { color: var(--muted); font-size: 13px; line-height: 1.5; }
+.meta, .path { margin-top: 6px; }
+.path { overflow-wrap: anywhere; font-family: ui-monospace, Consolas, monospace; }
+.badge { font-size: 12px; font-weight: 660; display: inline-flex; gap: 6px; align-items: center; white-space: nowrap;
+  border-radius: 100px; background: #eef2ef; color: #53625e; padding: 4px 9px; }
+.badge::before { content: ""; width: 7px; height: 7px; background: currentColor; border-radius: 50%; }
+.badge[data-state=running] { color: #126047; background: #d8f5e8; }
+.badge[data-state=done] { color: #175e46; background: #e7f4ea; }
+.badge[data-state=failed], .badge[data-state=interrupted] { color: #9a3b28; background: #fbece5; }
+#connection { background: #255346; color: #d1fae1; }
+#connection.offline { background: #733f36; color: #fff2e9; }
+.round { margin-top: 14px; padding: 18px; }
+.round-title { margin-bottom: 14px; }
+.flow { display: grid; grid-template-columns: repeat(5,minmax(0,1fr)); gap: 16px; }
+.stage { padding: 12px; min-width: 0; position: relative; border: 1px solid var(--line); border-radius: 10px; background: #f7faf8; }
+.stage:not(:last-child)::after { content: '›'; position: absolute; right: -13px; top: 32px; color: #69837a; }
+.stage[data-state=running] { border-color: #329371; background: var(--wash); box-shadow: inset 0 3px 0 #329371; }
+.stage[data-state=failed], .stage[data-state=interrupted] { border-color: #d39e90; background: #fffbf8; }
+.stage[data-state=skipped], .stage[data-state=pending] { background: #f5f7f6; }
+.stage-head { display: flex; gap: 7px; align-items: baseline; margin-bottom: 8px; }
+.step-index { min-width: 19px; color: var(--muted); font: 600 12px ui-monospace, Consolas, monospace; }
+.stage-name { font-size: 14px; line-height: 1.45; }
+.stage .sub { margin-top: 6px; overflow-wrap: anywhere; }
+@media (max-width: 760px) {
+  .bar, main { padding-left: 15px; padding-right: 15px; }
+  .bar { min-height: 75px; }
+  .flow { grid-template-columns: 1fr; gap: 11px; }
+  .stage:not(:last-child)::after { content: '⌄'; right: 50%; top: 100%; line-height: 10px; }
+}
+</style>
+</head>
+<body>
+<header><div class="bar"><h1>DataFlow 运行监控</h1><span id="connection" class="badge" role="status">正在连接</span></div></header>
+<main>
+  <div class="controls"><label for="run">运行记录</label><select id="run" disabled><option>正在读取</option></select></div>
+  <section id="overview" aria-label="运行概况"></section>
+  <div id="rounds"></div>
+</main>
+<script>
+const names = {qwen:"Qwen 提词", genception:"GenCeption 分割", abs:"ABS 评分", gate:"质量判断", refiner:"Qwen 改词"};
+const states = {running:"运行中", done:"已完成", pending:"待运行", skipped:"已跳过", failed:"失败", interrupted:"已中断"};
+const modes = {segment:"提词与分割", abs:"ABS 评分", prepare:"离线准备", refine:"评分与重试", demo:"合成演示"};
+const details = {qwen:"Qwen 推理", prepare:"准备分割输入", embeddings:"文本编码", encode:"视频编码",
+  forward:"分割推理", decode:"掩码解码", export:"导出掩码", abs_inputs:"准备评分输入", abs:"ABS 评分"};
+const chooser = document.getElementById("run");
+const overview = document.getElementById("overview");
+const rounds = document.getElementById("rounds");
+const connection = document.getElementById("connection");
+const formatTime = new Intl.DateTimeFormat("zh-CN", {timeZone:"Asia/Shanghai", dateStyle:"short", timeStyle:"medium"});
+let runs = [];
+let optionsKey;
+
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+function badge(state) {
+  const node = el("span", "badge", states[state]);
+  node.dataset.state = state;
+  return node;
+}
+function elapsed(start, finish, live) {
+  if (!start || (!finish && !live)) return "";
+  const secs = Math.max(0, Math.floor((finish || Date.now() / 1000) - start));
+  return secs < 60 ? secs + " 秒" : Math.floor(secs / 60) + " 分 " + secs % 60 + " 秒";
+}
+function stage(key, value, index, live) {
+  const box = el("div", "stage");
+  box.dataset.state = value.status;
+  const head = el("div", "stage-head");
+  head.append(el("span", "step-index", String(index + 1).padStart(2, "0")), el("strong", "stage-name", names[key]));
+  box.append(head, badge(value.status));
+  const extra = [details[value.detail] || value.detail, value.status === "skipped" ? "" : elapsed(value.started, value.finished, live), value.error].filter(Boolean);
+  if (extra.length) box.append(el("p", "sub", extra.join(" · ")));
+  if (value.sequence) box.append(el("p", "sub", value.sequence));
+  if (value.log && ["running","failed","interrupted"].includes(value.status)) {
+    const hint = el("p", "sub", value.log.split("/").pop());
+    hint.title = value.log;
+    box.append(hint);
+  }
+  return box;
+}
+function render() {
+  const run = runs.find(item => item.id === chooser.value);
+  if (!run) {
+    overview.replaceChildren(el("p", "empty", "暂无运行记录。启动一次 DataFlow 流水线后，进度会显示在这里。"));
+    rounds.replaceChildren();
+    return;
+  }
+  const current = run.rounds[run.rounds.length - 1];
+  const active = Object.keys(names).find(key => current.stages[key].status === "running");
+  const header = el("div", "summary");
+  const title = el("div", "summary-top");
+  title.append(el("h2", "", run.name), badge(run.status));
+  const description = [modes[run.mode], formatTime.format(run.started * 1000),
+    elapsed(run.started, run.finished, run.status === "running"),
+    active ? "当前节点 · " + names[active] : "", run.error].filter(Boolean);
+  header.append(title, el("p", "meta", description.join(" · ")), el("p", "path", run.output));
+  overview.replaceChildren(header);
+  rounds.replaceChildren(...run.rounds.slice().reverse().map(round => {
+    const card = el("section", "round");
+    const roundTitle = el("div", "round-title");
+    roundTitle.append(el("h2", "", round.number === 0 ? "首轮" : "重试第 " + round.number + " 轮"));
+    const focus = Object.keys(names).find(key => ["running","failed","interrupted"].includes(round.stages[key].status));
+    if (focus) roundTitle.append(badge(round.stages[focus].status));
+    const flow = el("div", "flow");
+    Object.keys(names).forEach((key, index) => flow.append(stage(key, round.stages[key], index, run.status === "running")));
+    card.append(roundTitle, flow);
+    return card;
+  }));
+}
+async function refresh() {
+  try {
+    const response = await fetch("/api/runs", {signal: AbortSignal.timeout(6000)});
+    if (!response.ok) throw new Error("status request failed");
+    const selected = chooser.value;
+    runs = await response.json();
+    const nextKey = runs.map(run => run.id + run.status).join(",");
+    if (optionsKey !== nextKey) {
+      optionsKey = nextKey;
+      chooser.replaceChildren(...runs.map(run => {
+        const option = el("option", "", run.name + " · " + states[run.status]);
+        option.value = run.id;
+        return option;
+      }));
+      chooser.disabled = !runs.length;
+      if (!runs.length) chooser.append(el("option", "", "暂无运行"));
+      else if (runs.some(run => run.id === selected)) chooser.value = selected;
+    }
+    connection.textContent = "实时更新";
+    connection.classList.remove("offline");
+    render();
+  } catch {
+    connection.textContent = "连接中断 · 正在重连";
+    connection.classList.add("offline");
+  } finally {
+    setTimeout(refresh, 2000);
+  }
+}
+chooser.addEventListener("change", render);
+refresh();
+</script>
+</body>
+</html>

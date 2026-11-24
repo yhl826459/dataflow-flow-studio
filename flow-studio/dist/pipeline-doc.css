@@ -1,0 +1,39 @@
+#pipeline-doc {
+  width:min(850px,94vw); max-width:none; padding:0; border:1px solid var(--line,#dbe3dd);
+  border-radius:14px; color:var(--ink,#172c26); background:white; overflow:hidden;
+}
+#pipeline-doc[open] {display:flex; flex-direction:column; max-height:89vh; max-height:89dvh}
+#pipeline-doc [hidden] {display:none}
+.pd-header,.pd-bar,.pd-footer {display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 24px; flex-shrink:0}
+.pd-header {padding-top:18px; padding-bottom:15px}
+.pd-header h2 {margin:3px 0 0; font-size:21px; overflow-wrap:anywhere}
+.pd-header small,.pd-bar [data-stamp],.pd-footer [role=status],.pd-text-label,.pd-preview .doc-empty {color:var(--muted,#62746c); font-size:13px}
+.pd-header [data-close] {border-radius:7px; font:26px/1 system-ui; width:34px; height:34px; flex:none}
+.pd-header [data-close]:hover,.pd-tools button:hover {background:#eaf2ec}
+.pd-bar {background:#f5f8f5; border-block:1px solid var(--line,#dbe3dd); flex-wrap:wrap}
+.pd-tabs {display:inline-flex; border:1px solid #d2ddd4; border-radius:7px; padding:2px; background:white}
+.pd-tabs button {border-radius:5px; padding:4px 14px; font-size:13px}
+.pd-tabs [aria-pressed=true] {background:#dceee4; color:#124f3d; font-weight:650}
+.pd-scroll {padding:18px 24px 22px; overflow:auto; min-height:0}
+.pd-preview {max-width:72ch; margin:auto; min-height:200px; font-size:15px; line-height:1.7; overflow-wrap:anywhere}
+.pd-preview :is(h2,h3,h4,h5,h6) {margin:1.1em 0 .25em; line-height:1.4; font-weight:650}
+.pd-preview>:first-child {margin-top:0}
+.pd-preview p,.pd-preview :is(ul,ol) {margin:.5em 0}
+.pd-preview :is(ul,ol) {padding-inline-start:1.7em}
+.pd-preview img {display:block; max-width:100%; max-height:62vh; height:auto; margin:12px 0; border-radius:6px}
+.pd-tools {display:flex; align-items:center; flex-wrap:wrap; gap:6px; margin-bottom:10px}
+.pd-tools button {border:1px solid var(--line,#dbe3dd); background:white; border-radius:6px; padding:5px 10px; font-size:13px}
+.pd-text-label {display:grid; gap:4px}
+.pd-text-label textarea {width:100%; resize:vertical; min-height:165px; height:min(42vh,400px); border:1px solid #c4d6c9; border-radius:7px; padding:12px; color:var(--ink,#172c26); background:#fcfdfc; font:14px/1.7 ui-monospace,"Microsoft YaHei UI",monospace}
+.pd-footer {border-top:1px solid var(--line,#dbe3dd)}
+.pd-footer [role=status] {flex:1; overflow-wrap:anywhere}
+.pd-footer [role=status].pd-error {color:#9a392c}
+.pd-footer button {flex:none}
+#pipeline-doc [data-conflict] {border:1px solid #edcc8f; border-radius:7px; background:#fff7e4; color:#6e4915; padding:10px 14px; margin-bottom:15px}
+#pipeline-doc [data-conflict] p {margin:0 0 6px}
+#pipeline-doc [data-conflict] details {margin-bottom:8px}
+#pipeline-doc [data-conflict] pre {font:inherit; white-space:pre-wrap; overflow-wrap:anywhere; max-height:160px; overflow:auto}
+@media(max-width:600px) {
+  .pd-header,.pd-bar,.pd-footer,.pd-scroll {padding-left:14px; padding-right:14px}
+  .pd-footer {flex-wrap:wrap}
+}
