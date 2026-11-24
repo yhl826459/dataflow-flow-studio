@@ -4,6 +4,8 @@
 
 [工作台使用指南](WORKBENCH.md)涵盖 [Windows 总入口](open-flow-studio.cmd)、个人部署、算子介绍、任务提交和运行排队。[独立开发与 PR](WORKBENCH.md#2-独立部署和协作)说明如何在自己的 amax 账号下部署和验证改动。
 
+[amax 个人部署步骤](docs/AMAX_DEPLOYMENT.md)提供从 Fork、复用已有模型权重到 Windows SSH 启动的可复制命令。
+
 | 目录 | 内容 |
 | --- | --- |
 | [flow-studio/dist](flow-studio/dist) | 可视化编排、运行监控和数据排队页面 |

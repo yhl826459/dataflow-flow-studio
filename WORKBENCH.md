@@ -43,6 +43,8 @@ ssh -N -L 127.0.0.1:18768:/tmp/flow-studio-yanghonglei-monitor/monitor.sock amax
 
 ## 2. 独立部署和协作
 
+首次接入 amax 可以按[逐步部署说明](docs/AMAX_DEPLOYMENT.md)配置。里面有克隆、安装、检查现成模型权重和设置 Windows SSH 的命令。
+
 ### 各自部署到 amax
 
 先在 GitHub Fork 仓库，再用自己的 amax 账号克隆并安装工作台。把 `YOUR_USERNAME` 换成你的 GitHub 用户名。
