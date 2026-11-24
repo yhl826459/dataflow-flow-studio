@@ -1,9 +1,19 @@
 // Only the server can resolve a dataset ID and verify its source.
 export {supportsHandGraph} from './hand-graph.js';
 
+export const datasetExecutionPlan=`<section class="dataset-report" aria-label="执行顺序">
+  <strong>执行顺序</strong>
+  <ul>
+    <li>多条序列按队列顺序逐条处理。</li>
+    <li>一条序列只有一段时，这段走完整条流水线。有多段时，首段先跑完它的提词、分割和已启用的评分等步骤。其余片段在当前算子全部处理完后，再一起进入下一步。同一批片段可复用模型。</li>
+    <li>启用全视频掩码融合时，等本条序列的所有片段处理完再融合。</li>
+  </ul>
+</section>`;
+
 export const datasetFields=`<div class="dataset-picker" hidden>
   <div class="dataset-heading"><div><strong>服务器数据集</strong><small data-root></small></div>
     <button type="button" class="linkbtn" data-refresh>刷新列表</button></div>
+  ${datasetExecutionPlan}
   <label class="label">数据目录<select class="field" name="datasetRoot"><option value="yanghonglei">yanghonglei · datasets</option></select></label>
   <label class="label" data-group-label hidden>数据集<select class="field" name="datasetGroup"></select></label>
   <label class="label" data-search-label hidden>搜索序列<input type="search" class="field" data-search></label>
@@ -23,7 +33,7 @@ export const datasetFields=`<div class="dataset-picker" hidden>
   <div class="batch-plan" data-batch hidden>
     <strong>处理队列</strong><ol data-batch-rows></ol>
     <label class="label">队列输出目录<input class="field" name="queueOut" placeholder="每条序列会写入独立子目录"></label>
-    <small class="help">按上方顺序逐条执行。某条失败会暂停余下序列。</small>
+    <small class="help">某条失败会暂停该批次的余下序列。</small>
   </div>
 </div>`;
 

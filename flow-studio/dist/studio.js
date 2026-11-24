@@ -4,7 +4,7 @@ import {createRecordRun,stepRecords,canProcessRecords} from './records.js';
 import {createLibraryStore} from './library-store.js';
 import {nodeSummary,summaryFields} from './operator-summary.js';
 import {openOperatorEditor} from './operator-editor.js';
-import {datasetFields,mountDatasetPicker,supportsHandGraph} from './dataset-picker.js?v=clip-queue';
+import {datasetExecutionPlan,datasetFields,mountDatasetPicker,supportsHandGraph} from './dataset-picker.js?v=dataset-execution';
 import {createGraphReviews} from './graph-review.js';
 
 const $=s=>document.querySelector(s);
@@ -605,7 +605,7 @@ function chooseTaskPreset(graph){
  const savedGraph=graphs.find(item=>item.id===graph.id)??graph;
  const hasNativeCode=savedGraph.nodes.some(item=>item.implementation?.kind==='native');
  modal('使用预设任务',`<label class="label">预设任务<select name="preset" class="field"><option value="">正在读取…</option></select></label>
- <p class="help" data-preset-summary role="status"></p><label class="code-review" data-preset-review hidden><input name="review" type="checkbox"><span>我已检查当前流水线的自定义 Python，确认本次使用这些代码。</span></label>`,
+ <p class="help" data-preset-summary role="status"></p>${datasetExecutionPlan}<label class="code-review" data-preset-review hidden><input name="review" type="checkbox"><span>我已检查当前流水线的自定义 Python，确认本次使用这些代码。</span></label>`,
  '加入队列',async values=>{
    const preset=presets.find(item=>item.id===values.get('preset'));
    if(!preset)throw Error('请选择一个待办。');
