@@ -6,17 +6,16 @@ Flow Studio 用于编排和运行 RGB 视频里的手、物实例分割流水线
 
 ### 克隆和安装
 
-先在 GitHub Fork 本仓库，再用自己的账号登录 amax。下面以 `xuzhefeng` 为例。
+两位开发者都克隆 `yhl826459/dataflow-flow-studio`。工作台各自在自己的 amax 账号下安装。下面以 `xuzhefeng` 为例。
 
 ```sh
 ssh -p 2207 xuzhefeng@hduiipl.orz2333.fun
 ```
 
-在 amax 终端运行下面的命令，输入自己的 **GitHub 用户名**。
+在 amax 终端克隆同一个 GitHub 仓库并安装。
 
 ```bash
-read -rp '你的 GitHub 用户名: ' GITHUB_USER
-git clone "https://github.com/${GITHUB_USER}/dataflow-flow-studio.git" "$HOME/dataflow-flow-studio" &&
+git clone https://github.com/yhl826459/dataflow-flow-studio.git "$HOME/dataflow-flow-studio" &&
 cd "$HOME/dataflow-flow-studio" &&
 bash flow-studio/install-amax.sh
 ```
@@ -80,17 +79,18 @@ ssh -N -o ExitOnForwardFailure=yes -p 2207 -L 127.0.0.1:18768:/tmp/flow-studio-y
 
 ### 通过 PR 共享改动
 
-在自己的 Fork 和功能分支里修改源码，测试后推到自己的 Fork，再向上游开 PR。若是在网页里试改算子，先把验证过的代码整理回 Fork 的源码文件再提交。编排草稿、API 配置、数据集和模型输出留在个人运行环境。
+接受 GitHub 协作者邀请后，用自己的 GitHub 账号把改动推到本仓库的功能分支。若是在网页里试改算子，先把验证过的代码整理回自己克隆的源码目录，再提交。编排草稿、API 配置、数据集和模型输出留在各自的 amax 环境。
 
 ```bash
-git switch -c feat/my-operator
+cd "$HOME/dataflow-flow-studio"
+git switch main && git pull --ff-only && git switch -c "work/$(id -un)/update-operator"
 # 修改并验证后，只暂存要分享的源文件
 git add -p
 git commit -m "Update video operator"
-git push -u origin feat/my-operator
+git push -u origin HEAD
 ```
 
-在 GitHub 从自己的分支发起 PR。PR 合并后，各自选择何时拉取并用安装脚本更新自己的工作台。
+在 GitHub 向 `yhl826459/dataflow-flow-studio` 的 `main` 提交 PR，由仓库所有者 `yhl826459` 审阅并决定是否合并。合并后，各自选择何时拉取并用安装脚本更新自己的工作台。
 
 ## 3. 认识视频分割算子
 

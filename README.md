@@ -16,6 +16,8 @@
 
 以自己的 amax 账号克隆代码后，运行 `bash flow-studio/install-amax.sh`，将当前分支部署到自己的 `$HOME/DataFlow`。工作台服务、编排、队列、模型接口配置和运行产物由各自的账号管理。模型、Python 环境、ABS 后端及数据集路径见[使用手册](flow-studio/LOCAL.md)和[流水线说明](extensions/qwen_gencep/README.md)。
 
+协作者克隆这个仓库，接受邀请后将改动推到各自的功能分支，并向 `main` 提交 PR。仓库所有者负责决定是否合并。 [PR 操作步骤](WORKBENCH.md#通过-pr-共享改动)
+
 工作台和模型在 amax 上运行。本机按[SSH 转发步骤](WORKBENCH.md#2-通过-ssh-转发访问界面)建立连接，再用浏览器打开工作台。ABS 密钥由各账号的服务环境文件读取。需要 API 反向转发时，为个人服务单独配置。
 
 需要反向转发时，在 amax 执行 `systemctl --user edit flow-studio`，填写以下配置。将占位地址替换成 ABS 配置中接口的 HTTP 协议、主机和端口，省略 `/v1` 等路径，并核对反向转发的目标。
