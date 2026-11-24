@@ -33,8 +33,9 @@ SHARED_DATASETS = Path("/data/xuzhefeng/video_object_phrases/datasets")
 
 
 def registered_roots(dataflow_root):
+    personal_root = os.environ.get("FLOW_STUDIO_DATASETS_ROOT") or str(Path(dataflow_root).parent / "datasets")
     return [
-        dict(id="yanghonglei", label="yanghonglei / datasets", path=str(Path(dataflow_root).parent / "datasets")),
+        dict(id="yanghonglei", label="个人数据集", path=personal_root),
         dict(id="xuzhefeng", label="xuzhefeng / video_object_phrases / datasets", path=str(SHARED_DATASETS)),
     ]
 
