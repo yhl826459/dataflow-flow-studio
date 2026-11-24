@@ -2,9 +2,7 @@
 
 用于编排和运行视频分割流水线的工作台。支持算子编辑、预设任务、数据队列、逐段进度、ABS 断点续跑和整段视频掩码融合。
 
-[工作台使用指南](WORKBENCH.md)涵盖 [Windows 总入口](open-flow-studio.cmd)、个人部署、算子介绍、任务提交和运行排队。[独立开发与 PR](WORKBENCH.md#2-独立部署和协作)说明如何在自己的 amax 账号下部署和验证改动。
-
-[amax 个人部署步骤](docs/AMAX_DEPLOYMENT.md)提供从 Fork、复用已有模型权重到 Windows SSH 启动的可复制命令。
+[工作台使用指南](WORKBENCH.md)集中说明 amax 个人部署、已有模型权重、SSH 端口转发、算子、任务队列和 PR 协作。
 
 | 目录 | 内容 |
 | --- | --- |
@@ -18,9 +16,9 @@
 
 以自己的 amax 账号克隆代码后，运行 `bash flow-studio/install-amax.sh`，将当前分支部署到自己的 `$HOME/DataFlow`。工作台服务、编排、队列、模型接口配置和运行产物由各自的账号管理。模型、Python 环境、ABS 后端及数据集路径见[使用手册](flow-studio/LOCAL.md)和[流水线说明](extensions/qwen_gencep/README.md)。
 
-Windows 双击 [open-flow-studio.cmd](open-flow-studio.cmd)，通过自己的 SSH 别名 `amax-workbench` 打开完整工作台。已有 `5090` 配置的原部署也可沿用。工作台服务从各账号的本地环境文件读取 ABS 密钥；需要 API 反向转发时，为个人服务单独配置。
+工作台和模型在 amax 上运行。本机按[SSH 转发步骤](WORKBENCH.md#2-通过-ssh-转发访问界面)建立连接，再用浏览器打开工作台。ABS 密钥由各账号的服务环境文件读取。需要 API 反向转发时，为个人服务单独配置。
 
-需要反向转发时，在 amax 执行 `systemctl --user edit flow-studio`，填写以下配置。将占位地址替换成 ABS 配置中接口的 HTTP 协议、主机和端口，省略 `/v1` 等路径，并核对 Windows 启动脚本的转发目标。
+需要反向转发时，在 amax 执行 `systemctl --user edit flow-studio`，填写以下配置。将占位地址替换成 ABS 配置中接口的 HTTP 协议、主机和端口，省略 `/v1` 等路径，并核对反向转发的目标。
 
 ```ini
 [Service]

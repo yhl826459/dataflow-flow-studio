@@ -2,62 +2,35 @@
 
 Flow Studio 用于编排和运行 RGB 视频里的手、物实例分割流水线。你可以拖动算子、选择服务器数据集、提交任务，也可以查看算子进度、处理队列和全视频掩码融合结果。
 
-## 1. Windows 总入口
+## 1. 在 amax 部署个人工作台
 
-克隆完整仓库或解压仓库 ZIP 后，双击根目录的 [open-flow-studio.cmd](open-flow-studio.cmd)。它会打开**自己的 amax 工作台**，同一个网页里可以编排、编辑 Python 算子、启动任务并查看监控和队列。Windows 需要 Python 3 和 OpenSSH 客户端；首次使用先完成下面的个人部署。
+### 克隆和安装
 
-在 Windows 的 `%USERPROFILE%\.ssh\config` 中配置一次个人 SSH 别名。
+先在 GitHub Fork 本仓库，再用自己的账号登录 amax。下面以 `xuzhefeng` 为例。
 
-```sshconfig
-Host amax-workbench
-    HostName <amax SSH 主机名>
-    Port <amax SSH 端口>
-    User <自己的 amax 账号>
+```sh
+ssh -p 2207 xuzhefeng@hduiipl.orz2333.fun
 ```
 
-默认连接服务器的 `/home/<账号>/DataFlow`，本机地址为 [http://127.0.0.1:18766/](http://127.0.0.1:18766/)。保留启动窗口以维持连接。已有 `5090` SSH 别名的原部署可以沿用原来的配置。如果账号家目录的位置不同，在 Windows 终端运行 `open-flow-studio.cmd --server-root /实际路径/DataFlow`。
-
-### 查看别人分享的工作台
-
-1. 确认系统已安装 **OpenSSH 客户端**，在 `%USERPROFILE%\.ssh\config` 添加下面的配置。主机和端口由工作台管理员提供，`User` 写你自己的、已开通权限的 amax 账号。
-
-   ```sshconfig
-   Host amax-monitor
-       HostName <amax SSH 主机名>
-       Port <amax SSH 端口>
-       User <你的 amax 账号>
-   ```
-
-2. 在 [open-amax-monitor.cmd](flow-studio/open-amax-monitor.cmd) 的 GitHub 文件页面点 **Download raw file**，保存后双击。若提示输入 SSH 密码，输入你自己的密码。首次连接若要求确认服务器身份，向管理员核对主机指纹。
-3. 转发就绪后，脚本会自动用浏览器打开 [只读工作台](http://127.0.0.1:18768/)。保持终端窗口开着。若浏览器没有自动打开，可手动打开同一个地址。如果本机端口已被占用，关闭之前打开的监控连接再试。
-
-顶部的 **运行监控** 显示当前算子、执行路径、事件和失败摘要。**数据排队** 显示正在处理的序列以及待执行顺序。展开序列可以查看各片段的帧范围、进度和待复核的融合接缝。
-
-也可以手动运行同一个 SSH 转发命令，再打开本机地址。
-
-```powershell
-ssh -N -L 127.0.0.1:18768:/tmp/flow-studio-yanghonglei-monitor/monitor.sock amax-monitor
-```
-
-只在电脑上编辑和演练时，也可使用 [open-workbench.cmd](flow-studio/open-workbench.cmd)，编排和浏览器演练记录保存在本机。
-
-## 2. 独立部署和协作
-
-首次接入 amax 可以按[逐步部署说明](docs/AMAX_DEPLOYMENT.md)配置。里面有克隆、安装、检查现成模型权重和设置 Windows SSH 的命令。
-
-### 各自部署到 amax
-
-先在 GitHub Fork 仓库，再用自己的 amax 账号克隆并安装工作台。把 `YOUR_USERNAME` 换成你的 GitHub 用户名。
+在 amax 终端运行下面的命令，输入自己的 **GitHub 用户名**。
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/dataflow-flow-studio.git
-cd dataflow-flow-studio
+read -rp '你的 GitHub 用户名: ' GITHUB_USER
+git clone "https://github.com/${GITHUB_USER}/dataflow-flow-studio.git" "$HOME/dataflow-flow-studio" &&
+cd "$HOME/dataflow-flow-studio" &&
 bash flow-studio/install-amax.sh
 ```
 
 安装脚本部署到本账号的 `$HOME/DataFlow`，安装 DataFlow 和融合所用的 Python 依赖，并启动该账号的 systemd 用户服务。编排与草稿、算子代码快照和队列在该账号的工作台目录里，运行输出在该账号的 `DataFlow/dataflow_output/`。每个人操作自己的实例。
 
-正式跑视频前，需要备齐该账号可用的模型和服务依赖。全流程使用的默认目录如下：
+```bash
+systemctl --user status flow-studio.service --no-pager
+curl -fsS --unix-socket "$HOME/DataFlow/flow-studio/.local/workbench.sock" http://localhost/api/bridge
+```
+
+### 复用已有的模型权重
+
+模型和运行环境都留在 amax。已有权重可以继续使用，配置时让个人账号指向自己有读取权限的模型路径。
 
 | 用途 | 在 amax 上准备 |
 | --- | --- |
@@ -67,9 +40,43 @@ bash flow-studio/install-amax.sh
 | ABS 评分 | 准备 `$HOME/scoring_scripts/abs/` 的评分程序和本人可用的 API 配置，在 `~/.config/flow-studio/agent.env` 设置配置指定的密钥变量。 |
 | 算子 Agent（可选） | 有个人 API 配置后，在 `$HOME/DataFlow` 运行 `.venv/bin/python -B flow-studio/operator_agent.py --install "$PWD"` 安装 Writer。 |
 
-用「选择数据集」先做输入预检，再提交一条短序列测试。个人环境配置变化后，用 `systemctl --user restart flow-studio.service` 重启自己的服务。若个人 API 需要经 Windows 反向转发，使用独立的远端回环端口配置个人服务，再用总入口的 `--abs-relay 127.0.0.1:远端端口:API主机:API端口` 选项连接。
+若 GenCeption 或 UMT5 的已有权重放在其他目录，可以在 amax 建立软链接。默认位置已有文件时，下面的命令会保留原文件。
+
+```bash
+read -erp 'GenCeption 权重 .pkl 的绝对路径: ' GENCEPTION
+[[ "$GENCEPTION" == /* && -f "$GENCEPTION" && -r "$GENCEPTION" ]] &&
+    ln -sT -- "$GENCEPTION" "$HOME/pipe_14b_v2.pkl"
+
+read -erp 'UMT5 模型目录的绝对路径: ' UMT5
+[[ "$UMT5" == /* && -r "$UMT5/config.json" ]] &&
+    ln -sT -- "$UMT5" "$HOME/umt5-xxl-encoder-bf16-dataflow"
+```
+
+用「选择数据集」先做输入预检，再提交一条短序列测试。个人环境配置变化后，用 `systemctl --user restart flow-studio.service` 重启自己的服务。
 
 两套应用仍共用 amax 的物理显卡。当前视频流程会用到同一对 GPU，正式推理需错开执行。
+
+## 2. 通过 SSH 转发访问界面
+
+### 打开自己的工作台
+
+在本机终端执行下面的命令。命令中的账号和套接字路径对应 `xuzhefeng` 的个人部署。
+
+```sh
+ssh -N -o ExitOnForwardFailure=yes -p 2207 -L 127.0.0.1:18766:/home/xuzhefeng/DataFlow/flow-studio/.local/workbench.sock xuzhefeng@hduiipl.orz2333.fun
+```
+
+保留终端窗口，然后在浏览器打开 [自己的工作台](http://127.0.0.1:18766/)。可在同一页面编辑编排和算子、提交任务并查看监控。代码、模型、数据和任务状态都保存在 amax 上。
+
+### 查看授权共享的只读监控
+
+已开通只读权限时，可以用自己的 amax 账号建立另一个转发，再打开 [共享只读工作台](http://127.0.0.1:18768/)。
+
+```sh
+ssh -N -o ExitOnForwardFailure=yes -p 2207 -L 127.0.0.1:18768:/tmp/flow-studio-yanghonglei-monitor/monitor.sock xuzhefeng@hduiipl.orz2333.fun
+```
+
+**运行监控**显示当前算子、执行路径和失败摘要。**数据排队**显示正在处理的序列和待执行顺序。展开序列可查看分段进度和待复核的融合接缝。
 
 ### 通过 PR 共享改动
 
@@ -78,7 +85,7 @@ bash flow-studio/install-amax.sh
 ```bash
 git switch -c feat/my-operator
 # 修改并验证后，只暂存要分享的源文件
-git add <修改的源码文件>
+git add -p
 git commit -m "Update video operator"
 git push -u origin feat/my-operator
 ```
