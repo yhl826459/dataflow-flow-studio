@@ -8,7 +8,7 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from pipeline import VideoSegmentationPipeline, retry_round, write_json
-from run_progress import STAGES, monitor_run
+from run_progress import monitor_run
 from score_feedback import context_rgb_frames, read_jsonl, run_refinement, write_jsonl
 
 
@@ -101,7 +101,8 @@ class FeedbackTest(unittest.TestCase):
             write_jsonl(source, [dict(sequence_id=sequence, video_path=str(root / f"{sequence}.mkv"),
                                     task=task, video_info=info) for sequence in sequences])
             pipeline = VideoSegmentationPipeline(source, root, generate, segment, score)
-            with monitor_run(root, STAGES, "demo", state_dir=Path(temp) / "status") as progress:
+            stages = ("qwen", "genception", "abs", "gate", "refiner")
+            with monitor_run(root, stages, "demo", state_dir=Path(temp) / "status") as progress:
                 pipeline.compile()
                 pipeline.forward()
                 result = run_refinement(root / "dataflow_step3.jsonl", root, threshold=7.0, refine=refine,
@@ -109,9 +110,11 @@ class FeedbackTest(unittest.TestCase):
             status = json.loads(progress.path.read_text(encoding="utf-8"))
             self.assertEqual(status["status"], "done")
             self.assertEqual([r["number"] for r in status["rounds"]], [0, 1, 2])
-            self.assertEqual([s["status"] for s in status["rounds"][0]["stages"].values()], ["done"] * 5)
-            self.assertEqual([s["status"] for s in status["rounds"][2]["stages"].values()],
-                             ["skipped", "done", "done", "done", "skipped"])
+            for number, completed in [(0, stages), (2, ("genception", "abs", "gate"))]:
+                actual = status["rounds"][number]["stages"]
+                self.assertEqual({name: step["status"] for name, step in actual.items()},
+                                 {name: "done" if name in completed else "skipped"
+                                  for name in ("prompt", *stages)})
             rows = read_jsonl(result)
             self.assertEqual([row["sequence_id"] for row in rows], sequences)
             self.assertEqual(rows[1]["status"], "no_targets")

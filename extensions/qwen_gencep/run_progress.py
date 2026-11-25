@@ -10,7 +10,7 @@ import time
 from uuid import uuid4
 
 STATE = Path.home() / ".local/state/dataflow-qwen-gencep"
-STAGES = ("qwen", "genception", "abs", "gate", "refiner")
+STAGES = ("prompt", "qwen", "genception", "abs", "gate", "refiner")
 CURRENT = ContextVar("dataflow_run_progress", default=None)
 
 
@@ -78,6 +78,30 @@ def new_round(number):
         progress.add_round(number, ("genception", "abs", "gate", "refiner"))
 
 
+def monitored_abs(score, progress, step):
+    @wraps(score)
+    def call(sequence, video, info, segments, out):
+        answer = score(sequence, video, info, segments, out)
+        if answer.get("status") != "scored":
+            return answer
+        try:
+            data = json.loads(Path(answer["scores"]).read_text(encoding="utf-8"))
+            by_id = {str(s["id"]): [] for s in segments}
+            for r in data["records"]:
+                by_id[str(r["id"])].append([r["frame"], r["genception"]])
+            rows = []
+            for target, samples in by_id.items():
+                values = [value for _, value in samples if value is not None]
+                rows.append(dict(target=target, samples=samples,
+                                 mean=sum(values)/len(values) if values else None))
+            step.setdefault("scoresByClip", {})[str(sequence)] = rows
+        except (OSError, ValueError, KeyError, TypeError):
+            step.setdefault("scoresByClip", {})[str(sequence)] = [{"error":"评分明细暂不可读"}]
+        progress.save()
+        return answer
+    return call
+
+
 def operator_progress(stage):
     def decorate(run):
         @wraps(run)
@@ -89,18 +113,25 @@ def operator_progress(stage):
             step.update(status="running", started=time.time(), worked=False)
             progress.operator = step
             progress.save()
+            op = args[0] if args and stage == "abs" else None
+            score = getattr(op, "score", None)
             try:
+                if callable(score):
+                    op.score = monitored_abs(score, progress, step)
                 result = run(*args, **kwargs)
             except KeyboardInterrupt:
                 step.update(status="interrupted")
                 raise
             except BaseException as error:
-                step.update(status="failed", error=type(error).__name__)
+                detail = str(error) if stage == "prompt" and type(error) in (RuntimeError, ValueError) else type(error).__name__
+                step.update(status="failed", error=detail)
                 raise
             else:
                 step["status"] = "done" if step["worked"] or stage == "gate" else "skipped"
                 return result
             finally:
+                if callable(score):
+                    op.score = score
                 step["finished"] = time.time()
                 progress.operator = None
                 progress.save()

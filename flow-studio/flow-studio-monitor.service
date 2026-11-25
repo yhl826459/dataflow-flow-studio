@@ -1,0 +1,13 @@
+[Unit]
+Description=DataFlow workbench read-only monitor for xuzhefeng
+After=flow-studio.service
+
+[Service]
+Type=simple
+WorkingDirectory=/data/yanghonglei/DataFlow/flow-studio
+ExecStart=/usr/bin/python3 -B /data/yanghonglei/DataFlow/flow-studio/shared_monitor.py --viewer xuzhefeng --socket /tmp/flow-studio-yanghonglei-monitor/monitor.sock
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

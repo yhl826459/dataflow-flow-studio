@@ -227,6 +227,27 @@ class QwenVideoPhraseGenerator(OperatorABC):
 
 
 @OPERATOR_REGISTRY.register()
+class ManualTarget(OperatorABC):
+    def __init__(self, prompt, translation_id, out):
+        super().__init__()
+        self.prompt = prompt
+        self.translation_id = translation_id
+        self.out = out
+
+    @operator_progress("prompt")
+    def run(self, storage, *, output_targets_key):
+        from manual_prompt import frozen_translation
+        report_work(detail="翻译中文描述或读取本次任务已保存的译文")
+        translated = frozen_translation(self.prompt, self.translation_id)
+        write_json(self.out / "prompt_translation.json", translated)
+        rows = storage.read("dict")
+        for row in rows:
+            row["prompt_zh"] = self.prompt
+            row[output_targets_key] = translated["targets"]
+        storage.write(rows)
+
+
+@OPERATOR_REGISTRY.register()
 class GenCeptionVideoSegmenter(OperatorABC):
     def __init__(self, out, segment):
         super().__init__()
@@ -346,18 +367,22 @@ def absolute_step(scoring, storage, **inputs):
 
 
 class VideoSegmentationPipeline(PipelineABC):
-    def __init__(self, source, out, generate, segment, score=None):
+    def __init__(self, source, out, generate, segment, score=None, manual=None):
         super().__init__()
         self.storage = FileStorage(str(source), cache_path=str(out), file_name_prefix="dataflow")
-        self.qwen = QwenVideoPhraseGenerator(out, generate)
+        self.manual = manual
+        self.qwen = None if manual is not None else QwenVideoPhraseGenerator(out, generate)
         self.genception = GenCeptionVideoSegmenter(out, segment)
         self.absolute = GenCeptionAbsoluteScorer(out, score) if score is not None else None
 
     def forward(self):
-        self.qwen.run(storage=self.storage.step(), input_sequence_key="sequence_id",
-                      input_video_key="video_path", input_task_key="task",
-                      input_video_info_key="video_info",
-                      output_targets_key="targets", output_qwen_result_key="qwen_result")
+        if self.manual is not None:
+            self.manual.run(storage=self.storage.step(), output_targets_key="targets")
+        else:
+            self.qwen.run(storage=self.storage.step(), input_sequence_key="sequence_id",
+                          input_video_key="video_path", input_task_key="task",
+                          input_video_info_key="video_info",
+                          output_targets_key="targets", output_qwen_result_key="qwen_result")
         self.genception.run(storage=self.storage.step(), input_sequence_key="sequence_id",
                             input_video_key="video_path", input_targets_key="targets",
                             input_video_info_key="video_info",
@@ -424,7 +449,11 @@ def main():
     parser.add_argument("--refine", action="store_true",
                         help="Run score-based mask acceptance and up to two Qwen prompt revisions per target")
     parser.add_argument("--refine-threshold", type=float, help="Pass only above this ABS score (default: 7.0)")
+    parser.add_argument("--prompt-zh", help="Segment the target described by this Chinese phrase")
+    parser.add_argument("--translation-id", help="Reuse the frozen translation for this workbench submission")
     args = parser.parse_args()
+    if args.prompt_zh is not None and (not args.prompt_zh.strip() or not args.input or args.refine):
+        parser.error("--prompt-zh requires a non-empty phrase and --input without --refine")
     threshold = 7.0 if args.refine_threshold is None else args.refine_threshold
     if args.refine and not args.abs:
         parser.error("--refine requires --abs")
@@ -473,7 +502,7 @@ def main():
         segment = partial(segment_gencep, gpus=args.gpus, checkpoint=checkpoint,
                           encoder_model=args.encoder_model.resolve(), encoder_python=args.encoder_python,
                           handoff=args.encoder_handoff)
-    stages = [] if args.segments is not None else ["qwen", "genception"]
+    stages = [] if args.segments is not None else ["prompt" if args.prompt_zh is not None else "qwen", "genception"]
     if score is not None:
         stages.append("abs")
     if args.refine:
@@ -488,8 +517,9 @@ def main():
         else:
             source = out / "input.jsonl"
             snapshot_input(args.input.resolve(strict=True), source)
+            manual = ManualTarget(args.prompt_zh, args.translation_id, out) if args.prompt_zh is not None else None
             pipeline = VideoSegmentationPipeline(
-                source, out, partial(generate_qwen, gpus=args.gpus), segment, score=score,
+                source, out, partial(generate_qwen, gpus=args.gpus), segment, score=score, manual=manual,
             )
             result = out / ("dataflow_step3.jsonl" if score is not None else "dataflow_step2.jsonl")
         pipeline.compile()

@@ -85,6 +85,11 @@
 }
 .fc-port::after { content: ''; border: 1.3px solid #8ca199; width: 8px; height: 8px; box-sizing: border-box; border-radius: 50%; background: #fff; }
 .fc-port-in { left: 0; }
+.fc-dual .fc-port[data-port=rgb] {top:25%;}
+.fc-dual .fc-port[data-port=targets] {top:75%;}
+.fc-dual .fc-port-label {position:absolute;left:15px;white-space:nowrap;font-size:10px;color:#376656;font-weight:600;}
+.fc-node.fc-dual .fc-node-icon {display:none;}
+.fc-node.fc-dual .fc-node-body {padding-left:63px;}
 .fc-port-out { left: 100%; }
 .fc-port-out::after { background: #91a69d; border-color: #fff; box-shadow: 0 0 0 1px #91a69d; width: 7px; height: 7px; }
 .fc-port:hover::after,.fc-port:focus-visible::after,.fc-origin .fc-port-out::after,.fc-connecting .fc-port-in::after { border-color: var(--fc-teal); background: #b9e5db; box-shadow: 0 0 0 3px #178c7519; }

@@ -22,6 +22,55 @@ import local_server as app
 
 
 class LaunchTest(unittest.TestCase):
+    def test_unchanged_native_copy_uses_batch_runner_but_real_edits_are_frozen(self):
+        import run_progress
+        from operator_sources import source_for
+        project = Path(app.__file__).resolve().parents[1]
+        baseline = source_for(project, "refine", "native")
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp).resolve()
+            source = home / "clips.jsonl"
+            source.write_text('{"task":"objects"}\n')
+            with (patch.object(Path, "home", return_value=home), patch.object(Path, "cwd", return_value=project),
+                  patch.object(run_progress, "STATE", home/"state"),
+                  patch.object(app.subprocess, "Popen", return_value=SimpleNamespace(pid=123)) as spawn):
+                for changed in (False, True):
+                    impl = dict(kind="native", code=baseline["code"]+("# saved edit\n" if changed else ""),
+                                baseHash=baseline["baseHash"])
+                    graph = dict(id="hand-seg", nodes=[dict(type="input",config={"task":"objects"}),
+                                                       dict(type="refine",implementation=impl)])
+                    launch = app.remote_launch(dict(graph=graph, flags=["--workbench-fuse"], dataset={},
+                                                    input=str(source), out=str(home/str(changed))))
+                    work = home/"state/workbench"/launch["requestId"]
+                    self.assertEqual((work/"source").exists(), changed)
+                    nodes = json.loads((work/"launch.json").read_text())["graph"]["nodes"]
+                    self.assertEqual("implementation" in nodes[-1], changed)
+                    self.assertEqual(spawn.call_args.kwargs["env"]["FLOW_STUDIO_NATIVE_OVERRIDES"], "refine" if changed else "")
+                    self.assertIn("--workbench-compact", spawn.call_args.args[0])
+
+    def test_named_segmentation_ports_and_monitor(self):
+        nodes = [dict(id=kind, type=kind) for kind in ("input","prompt","segment","output")]
+        rgb = dict(id="video-wire", **{"from":"input","to":"segment","targetPort":"rgb"})
+        target = dict(id="phrase-wire", **{"from":"prompt","to":"segment","targetPort":"targets"})
+        output = dict(id="mask-wire", **{"from":"segment","to":"output"})
+        graph = dict(id="manual", version=4, nodes=nodes, edges=[rgb,target,output])
+        self.assertIn("--prompt-zh=", app.compile_graph(graph, True))
+        for edges in ([target,output], [rgb,output], [dict(rgb,targetPort="targets"),target,output],
+                      [rgb,target,dict(target,id="extra"),output]):
+            with self.assertRaises(ValueError):
+                app.compile_graph(dict(graph, edges=edges), True)
+            with self.assertRaises(ValueError):
+                app.validate_library(dict(graphs=[dict(graph,edges=edges)], drafts={}, custom=[]))
+        stages = {"prompt":{"started":1,"status":"running"}, "genception":{"status":"pending"}}
+        state = dict(id="run", output="/tmp/test", started=1, status="running", has_input=True,
+                     rounds=[dict(number=0,stages=stages)], receipt=dict(graph=graph,answer={"log":""}))
+        self.assertEqual(app.convert(state)["activeEdges"], [rgb["id"]])
+        stages["prompt"]["status"]="failed"
+        self.assertEqual(app.convert(state)["activeEdges"], [rgb["id"]])
+        stages["prompt"].update(status="done",finished=2)
+        stages["genception"].update(status="running",started=3)
+        self.assertEqual(app.convert(state)["activeEdges"], [rgb["id"],target["id"]])
+
     def test_abs_resume_uses_the_api_failure_classification(self):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp).resolve()
@@ -42,6 +91,24 @@ class LaunchTest(unittest.TestCase):
                                      dict(stateId="run", group=None, sequence=clip.name))
             log.write_text("Error code: 401")
             self.assertIsNone(app.resume_candidate(state, record))
+
+    def test_abs_resume_checks_hidden_runtime_in_compact_output(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp).resolve()
+            work = out / ".run" / "first-part"
+            clip = work / "part-1"
+            for file in (work / "dataflow_step2.jsonl", clip / "abs_inputs/job.json",
+                         clip / "abs_inputs/config.json", clip / "Absolute Score/_run/manifest.json"):
+                file.parent.mkdir(parents=True, exist_ok=True)
+                file.touch()
+            log = clip / "abs.log"
+            log.write_text("Error code: 503")
+            state = dict(id="run", status="failed", rounds=[
+                dict(number=0, group="first-part", stages={"abs": dict(status="failed", sequence=clip.name, log=str(log))})
+            ])
+            record = dict(graph={"nodes": []}, answer={"output": str(out)})
+            self.assertEqual(app.resume_candidate(state, record),
+                             dict(stateId="run", group="first-part", sequence=clip.name))
 
     def test_launch_with_abs_reads_configuration_before_spawning(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {seedGraphs,validateGraph} from './dist/model.js';
+import {seedGraphs,validateGraph,createDemoRun,advanceRun} from './dist/model.js';
 import {reviewGraph} from './dist/review-logic.js';
 import {supportsHandGraph} from './dist/dataset-picker.js';
 
@@ -15,6 +15,34 @@ function hand({score = true, feedback = true} = {}) {
   return graph;
 }
 const records = () => seedGraphs()[1];
+
+test('manual segmentation joins the RGB and target ports before execution',()=>{
+  const graph=hand({score:false,feedback:false});
+  const prompt=graph.nodes.find(n=>n.type==='qwen');
+  prompt.type='prompt';prompt.config={};prompt.name='中文目标描述';
+  assert.ok(supportsHandGraph(graph)); // old saved runs
+  const rgb=graph.edges.find(e=>e.from==='input');
+  rgb.to='segment';rgb.targetPort='rgb';
+  const target=graph.edges.find(e=>e.from===prompt.id);
+  target.targetPort='targets';
+  assert.deepEqual(validateGraph(graph),[]);
+  assert.ok(reviewGraph(graph).modes.includes('live'));
+  let run=advanceRun(createDemoRun(graph));
+  assert.equal(run.current,prompt.id);
+  assert.equal(run.nodeStates.segment,'waiting');
+  run=advanceRun(run);
+  assert.equal(run.current,'segment');
+  assert.deepEqual(run.activeEdges,[rgb.id,target.id]);
+  assert.equal(advanceRun(advanceRun(run)).status,'completed');
+  for(const invalid of [
+    graph.edges.filter(e=>e!==rgb),graph.edges.filter(e=>e!==target),
+    graph.edges.map(e=>e===rgb?{...e,targetPort:'targets'}:e),
+    [...graph.edges,{...target,id:'duplicate'}],
+  ]){
+    const bad={...graph,edges:invalid};
+    assert.ok(validateGraph(bad).length);assert.equal(supportsHandGraph(bad),false);
+  }
+});
 const config = (g,id) => g.nodes.find(n => n.id === id).config;
 
 test('three server layouts and the JSONL template retain their available modes', () => {

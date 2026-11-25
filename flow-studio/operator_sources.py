@@ -9,6 +9,7 @@ import re
 NATIVE = {
     "input": ("pipeline.py", "snapshot_input"),
     "qwen": ("pipeline.py", "QwenVideoPhraseGenerator"),
+    "prompt": ("pipeline.py", "ManualTarget"),
     "segment": ("pipeline.py", "GenCeptionVideoSegmenter"),
     "score": ("pipeline.py", "GenCeptionAbsoluteScorer"),
     "gate": ("score_feedback.py", "MaskQualityGate"),

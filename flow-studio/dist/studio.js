@@ -1,4 +1,4 @@
-import {icon,types,seedGraphs,validateGraph,createDemoRun,advanceRun} from './model.js';
+import {icon,types,dualSegment,segmentPorts,portIssues,seedGraphs,validateGraph,createDemoRun,advanceRun} from './model.js';
 import {mountCanvas} from './canvas.js';
 import {createRecordRun,stepRecords,canProcessRecords} from './records.js';
 import {createLibraryStore} from './library-store.js';
@@ -6,6 +6,7 @@ import {nodeSummary,summaryFields} from './operator-summary.js';
 import {openOperatorEditor} from './operator-editor.js';
 import {datasetExecutionPlan,datasetFields,mountDatasetPicker,supportsHandGraph} from './dataset-picker.js?v=dataset-execution';
 import {createGraphReviews} from './graph-review.js';
+import {absPanel} from './abs-monitor.js';
 
 const $=s=>document.querySelector(s);
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -155,10 +156,13 @@ function runGraph(r, fallback){
 function executionDetails(r,snap){
  if(!r)return '';
  const lines=[],branch=r.events?.filter(e=>['retry','pass','review'].includes(e.condition)).at(-1);
+ for(const e of snap.edges.filter(e=>e.targetPort))lines.push([segmentPorts[e.targetPort],r.activeEdges?.includes(e.id)?'已就绪':'等待输入']);
  if(r.task)lines.push(['目标任务',taskName(r.task)]);
  if(r.output)lines.push(['输出目录',r.output]);
  if(r.fusion)lines.push(['全视频掩码',r.fusion.path],['实例轨迹',String(r.fusion.tracks)],
    ['待复核接缝',String(r.fusion.reviewSeams.length)]);
+ if(r.fusion?.reviewNotes?.length)lines.push(['融合待复核',r.fusion.reviewNotes.map(n=>'第 '+n.part+' 段 · '+n.localId+' · '+n.reason).join('；')]);
+ if(r.fusion?.emptyFrameRanges?.length)lines.push(['无掩码帧',r.fusion.emptyFrameRanges.map(([a,b])=>a+'–'+(b-1)).join('、')]);
  const selected=r.dataset?.selection;
  if(selected?.id){
    lines.push(['来源目录',selected.sourceRoot||'yanghonglei'],['输入序列',selected.id],['输入范围',selected.mode==='whole'?'整条序列 · 分段处理':selected.mode==='clip'?'从 '+(selected.start??0)+' 秒起最多 81 帧':'完整视频']);
@@ -169,7 +173,10 @@ function executionDetails(r,snap){
  if(r.currentActivity?.sequence)lines.push(['处理序列',r.currentActivity.sequence]);
  if(r.currentActivity?.detail)lines.push(['当前活动',r.currentActivity.detail]);
  if(!branch&&r.mode==='live'){const labels=snap.edges.filter(e=>r.activeEdges?.includes(e.id)&&['retry','pass','review'].includes(e.condition)).map(e=>e.label);if(labels.length)lines.push(['已观测分支',[...new Set(labels)].join('、')])}
- return lines.map(([label,value])=>`<div class="inspect-line"><span>${esc(label)}</span><b>${esc(value)}</b></div>`).join('');
+ const preview=directServer&&r.hasPreview
+   ? `<a class="btn" href="/api/run-preview?id=${encodeURIComponent(r.id)}" target="_blank" rel="noopener">观看全视频 RGB / 掩码对照</a>`
+   : '';
+ return lines.map(([label,value])=>`<div class="inspect-line"><span>${esc(label)}</span><b>${esc(value)}</b></div>`).join('')+preview;
 }
 function fieldControl(f,n){const val=n.config?.[f.key]??f.default??'';if(f.type==='select')return `<label class="label">${esc(f.label)}<select class="field" data-config="${esc(f.key)}">${(f.options??[]).map(o=>opt(typeof o==='object'?o.value:o,typeof o==='object'?o.label:o,val)).join('')}</select></label>`;
  return `<label class="label">${esc(f.label)}<input class="field" data-config="${esc(f.key)}" type="${f.type==='number'?'number':'text'}" value="${esc(val)}" ${f.type==='number'?'step="any"':''}></label>`;}
@@ -216,7 +223,7 @@ function inspector(g){
  if(!preview){
  const ins=g.edges.filter(e=>e.to===n.id),outs=g.edges.filter(e=>e.from===n.id);const title=id=>g.nodes.find(x=>x.id===id)?.name??id;
  inner+=`<hr><label class="label">节点名称<input id="node-name" class="field" maxlength="80" value="${esc(n.name)}"></label>
- ${d.fields?.length?`<h3>算子参数</h3>${d.fields.map(f=>fieldControl(f,n)).join('')}`:''}<hr><h3>连接关系</h3>${ins.map(e=>`<div class="portline">${I('link',13)}<b>输入</b>${esc(title(e.from))}</div>`).join('')}${outs.map(e=>`<button class="portline" data-edge-edit="${esc(e.id)}" title="编辑连线条件">${I('branch',13)}<b>${esc(e.label||'输出')}</b>${esc(title(e.to))} ${I('edit',12)}</button>`).join('')}${!ins.length&&!outs.length?'<span class="caption">尚未连接</span>':''}<div class="ins-actions">${action('template','copy','存为算子模板','linkbtn')}${action('delete-node','trash','删除节点','iconbtn danger')}</div>`;
+ ${d.fields?.length?`<h3>算子参数</h3>${d.fields.map(f=>fieldControl(f,n)).join('')}`:''}<hr><h3>连接关系</h3>${ins.map(e=>`<div class="portline">${I('link',13)}<b>${esc(segmentPorts[e.targetPort]||'输入')}</b>${esc(title(e.from))}</div>`).join('')}${outs.map(e=>`<button class="portline" data-edge-edit="${esc(e.id)}" title="编辑连线条件">${I('branch',13)}<b>${esc(e.label||'输出')}</b>${esc(title(e.to))} ${I('edit',12)}</button>`).join('')}${!ins.length&&!outs.length?'<span class="caption">尚未连接</span>':''}<div class="ins-actions">${action('template','copy','存为算子模板','linkbtn')}${action('delete-node','trash','删除节点','iconbtn danger')}</div>`;
  }
  }
  return `<aside class="inspector" id="op-inspector" aria-labelledby="op-inspector-title"><div class="boxhead"><div class="row">${I(preview?'box':'sliders',16)}<strong id="op-inspector-title">${preview?'算子说明':'节点属性'}</strong></div></div><div class="inspect-body">${inner}</div></aside>`;
@@ -311,15 +318,18 @@ function queuePage(){
    const moves=index===undefined?'':`<button type="button" class="linkbtn" data-queue-move="-1" aria-label="上移 ${esc(name)}" ${index===0||queueOrderBusy?'disabled':''}>上移</button><button type="button" class="linkbtn" data-queue-move="1" aria-label="下移 ${esc(name)}" ${index===waiting.length-1||queueOrderBusy?'disabled':''}>下移</button>`;
    const clips=clipsFor(item,run);
    const review=run?.fusion?.reviewSeams??[];
+   const notes=run?.fusion?.reviewNotes??[], empty=run?.fusion?.emptyFrameRanges??[];
    const clipDetails=clips.length?`<details class="queue-clips" data-clip-output="${esc(item.out)}" ${expandedClips.has(item.out)?'open':''}>
-     <summary>${clips.length} 段 · ${clips.filter(clip=>clip.status==='done').length} 段已完成${review.length?' · '+review.length+' 处接缝待复核':''}</summary>
+     <summary>${clips.length} 段 · ${clips.filter(clip=>clip.status==='done').length} 段已完成${review.length?' · '+review.length+' 处接缝待复核':''}${notes.length||empty.length?' · 融合待复核':''}</summary>
      <ol>${clips.map(clip=>{
        const step=clip.steps.findLast(step=>step.status==='running'||step.status==='failed')??clip.steps.findLast(step=>step.status!=='waiting');
        const info=step?` · ${esc(step.stage)}${step.round>1?' 第 '+step.round+' 轮':''}${step.detail?' · '+esc(step.detail):''}`:'';
        const history=clip.steps.filter(item=>item.status!=='waiting');
        return `<li><div class="queue-clip-line"><b>第 ${clip.index} 段</b><span>帧 ${clip.firstFrame}–${clip.firstFrame+clip.frames-1}（${clip.frames} 帧）</span><small>${esc(statuses[clip.status]??(clip.status==='paused'?'已暂停':'待执行'))}${info}</small></div>
          ${history.length>1?`<div class="queue-clip-history">${history.map(item=>esc(item.stage)+'（'+esc(statuses[item.status]??item.status)+'）').join(' · ')}</div>`:''}</li>`;
-     }).join('')}</ol>${review.length?`<strong>待复核接缝</strong><ul>${review.map(seam=>
+     }).join('')}</ol>${notes.length?`<ul>${notes.map(n=>`<li>第 ${esc(n.part)} 段 · ${esc(n.localId)} · 帧 ${esc(n.firstFrame)}–${esc(n.lastFrame)} · ${esc(n.reason)}</li>`).join('')}</ul>`:''}
+     ${empty.length?`<p>无掩码帧待复核 · ${empty.map(([a,b])=>esc(a)+'–'+esc(b-1)).join('、')}</p>`:''}
+     ${review.length?`<strong>待复核接缝</strong><ul>${review.map(seam=>
        `<li>第 ${seam.left} → ${seam.right} 段 · 帧 ${seam.firstFrame}–${seam.firstFrame+seam.frames-1} · ${esc(seam.reason)}</li>`).join('')}</ul>`:''}</details>`:'';
    return `<li class="queue-row" ${index===undefined?'':`draggable="${!queueOrderBusy}" data-queue-item="${esc(item.out)}"`}>
      <div><strong>${esc(name)}</strong><small>${esc(taskName(item.task))}${item.continuation?' · 继续 ABS 评分':''}${flow?' · '+esc(flow):''}</small></div>
@@ -371,7 +381,7 @@ function confirmResume(){
 }
 function monitor(g){const rr=graphRuns(),r=currentRun();const snap=runGraph(r,g);const current=snap.nodes.find(n=>n.id===r?.current);const chosen=snap.nodes.find(n=>n.id===selectedNode);
  const info=`<aside class="inspector"><div class="boxhead"><strong>任务详情</strong>${r?statusBadge(r.status):badge('待启动')}</div><div class="inspect-body inspect-list">${r?`<div class="inspect-line"><span>执行方式</span><strong>${modeName(r)}</strong></div><div class="inspect-line"><span>启动时间</span><b>${esc(date(r.startedAt))}</b></div><div class="inspect-line"><span>当前节点</span><b>${esc(r.status==='running'?(current?.name??'等待事件'):'—')}</b></div><div class="inspect-line"><span>结束时间</span><b>${esc(date(r.endedAt))}</b></div>${executionDetails(r,snap)}${resumeAction(r)}${chosen?`<hr><div class="typehead">${motif(chosen.type)}<div><strong>${esc(chosen.name)}</strong><small>${esc(statuses[r.nodeStates?.[chosen.id]]??'无事件')}</small></div></div>`:''}${r.mode==='records'&&r.status==='completed'?action('result','download','导出处理结果','btn'):''}`: '<p>启动后可在此查看节点状态、运行方式和起止时间。</p>'}</div></aside>`;
- return `${queuePanel(g)}<div class="monitorbar"><select class="field" id="run-select" aria-label="选择运行记录" ${!r?'disabled':''}>${rr.map(x=>opt(x.id,modeName(x)+' · '+date(x.startedAt)+' · '+(statuses[x.status]??x.status)+(x.name?' · '+x.name:''),r?.id)).join('')||'<option>尚无运行记录</option>'}</select>${action('refresh','history','刷新','linkbtn')}</div>${livePending?`<p class="caption">${esc(livePending)}</p>`:''}${liveError?`<p class="caption">${esc(liveError)}</p>`:''}<div class="editor-grid"><div>${board(snap,true,!r||Boolean(r.graph))}<section class="events"><div class="boxhead"><strong>执行事件</strong><span class="caption">${r?.events?.length??0} 条</span></div><div class="eventlog">${(r?.events??[]).slice().reverse().map(e=>`<div class="event"><span class="time">${esc(clock(e.time))}</span><b>${esc(snap.nodes.find(n=>n.id===e.nodeId)?.name??'任务')}</b><span>${esc(e.message)}</span></div>`).join('')||'<div class="empty">等待首条执行事件</div>'}</div></section></div>${info}</div>`;}
+ return `${queuePanel(g)}<div class="monitorbar"><select class="field" id="run-select" aria-label="选择运行记录" ${!r?'disabled':''}>${rr.map(x=>opt(x.id,modeName(x)+' · '+date(x.startedAt)+' · '+(statuses[x.status]??x.status)+(x.name?' · '+x.name:''),r?.id)).join('')||'<option>尚无运行记录</option>'}</select>${action('refresh','history','刷新','linkbtn')}</div>${livePending?`<p class="caption">${esc(livePending)}</p>`:''}${liveError?`<p class="caption">${esc(liveError)}</p>`:''}<div class="editor-grid"><div>${board(snap,true,!r||Boolean(r.graph))}${absPanel(r,esc,expandedClips)}<section class="events"><div class="boxhead"><strong>执行事件</strong><span class="caption">${r?.events?.length??0} 条</span></div><div class="eventlog">${(r?.events??[]).slice().reverse().map(e=>`<div class="event"><span class="time">${esc(clock(e.time))}</span><b>${esc(snap.nodes.find(n=>n.id===e.nodeId)?.name??'任务')}</b><span>${esc(e.message)}</span></div>`).join('')||'<div class="empty">等待首条执行事件</div>'}</div></section></div>${info}</div>`;}
 function renderReview(){
  const panel=$('#graph-review');
  if(!panel)return;
@@ -418,7 +428,7 @@ function render(){
  }
  renderReview();if(!$('#canvas'))return;
  const r=page==='monitor'?currentRun():null;const snap=runGraph(r,g);
- canvas=mountCanvas($('#canvas'),{graph:snap,viewKey:baseView(snap),selected:selectedOp?null:selectedNode,mode:page==='monitor'?'monitor':'edit',running:r?.status==='running',states:r?.nodeStates??{},activeEdges:r?.activeEdges??[],currentEdge:r?.status==='running'?r.activeEdge:null,onEditEdge:id=>{const edge=g.edges.find(e=>e.id===id);if(edge)wire(edge.from,edge.to,edge.id)},onSelect:id=>{finishEditingNode();const changed=selectedOp!==null||selectedNode!==id;selectedOp=null;selectedNode=id;render();if(changed)$('#op-inspector')?.classList.add('inspect-enter')},onMove:(id,x,y)=>change(q=>{const n=q.nodes.find(n=>n.id===id);if(n)Object.assign(n,{x,y})}),onAdd:addNode,onConnect:(from,to)=>wire(from,to),onDeleteEdge:id=>change(q=>q.edges=q.edges.filter(e=>e.id!==id))});}
+ canvas=mountCanvas($('#canvas'),{graph:snap,viewKey:baseView(snap),selected:selectedOp?null:selectedNode,mode:page==='monitor'?'monitor':'edit',running:r?.status==='running',states:r?.nodeStates??{},activeEdges:r?.activeEdges??[],currentEdge:r?.status==='running'?r.activeEdge:null,onEditEdge:id=>{const edge=g.edges.find(e=>e.id===id);if(edge)wire(edge.from,edge.to,edge.id)},onSelect:id=>{finishEditingNode();const changed=selectedOp!==null||selectedNode!==id;selectedOp=null;selectedNode=id;render();if(changed)$('#op-inspector')?.classList.add('inspect-enter')},onMove:(id,x,y)=>change(q=>{const n=q.nodes.find(n=>n.id===id);if(n)Object.assign(n,{x,y})}),onAdd:addNode,onConnect:(from,to,port)=>wire(from,to,null,port),onDeleteEdge:id=>change(q=>q.edges=q.edges.filter(e=>e.id!==id))});}
 function addNode(key,x,y){
  const spec=paletteItem(key,activeGraph());
  if(!spec||!Number.isFinite(x)||!Number.isFinite(y))return;
@@ -444,6 +454,7 @@ function nextSavedVersion(graph){
 function save(prepared){
  if(!prepared)finishEditingNode();
  const g=prepared??nextSavedVersion(activeGraph());
+ const issue=portIssues(g)[0];if(issue){notify(issue.message);return;}
  if(!drafts[g.id]){
    if(!prepared)reviews.start(graphs.find(item=>item.id===g.id),true);
    notify('当前版本已保存');return;
@@ -548,8 +559,13 @@ function designOp(existing,templateId='') {
    fields();
  };
 }
-function wire(from,to,id=null){const g=activeGraph(),src=g.nodes.find(n=>n.id===from),dst=g.nodes.find(n=>n.id===to),old=g.edges.find(e=>e.id===id);if(!src||!dst||from===to)return;const conds=src.type==='gate'?{pass:'通过',retry:'重试',review:'待复核'}:{next:'下一步'};const c=old?.condition??Object.keys(conds).find(v=>!g.edges.some(e=>e.from===from&&e.condition===v))??Object.keys(conds)[0];
- const apply=(cond,label)=>{if(g.edges.some(e=>e.id!==id&&e.from===from&&(e.condition||'next')===cond))throw Error('该出口已有连线，请先选中并删除旧线。');change(q=>{const e={id:id??uid('edge'),from,to,condition:cond,label};if(id)q.edges=q.edges.map(x=>x.id===id?e:x);else q.edges.push(e)})};
+function wire(from,to,id=null,port=null){const g=activeGraph(),src=g.nodes.find(n=>n.id===from),dst=g.nodes.find(n=>n.id===to),old=g.edges.find(e=>e.id===id);if(!src||!dst||from===to)return;const conds=src.type==='gate'?{pass:'通过',retry:'重试',review:'待复核'}:{next:'下一步'};const c=old?.condition??Object.keys(conds).find(v=>!g.edges.some(e=>e.from===from&&e.condition===v))??Object.keys(conds)[0];
+ const targetPort=old?.targetPort??port;
+ if(dst.id===dualSegment(g)?.id){
+   if(!targetPort||targetPort!==({input:'rgb',prompt:'targets'}[src.type])){notify('视频输入请接「RGB 视频」，中文目标描述请接「目标描述」。');return;}
+   if(g.edges.some(e=>e.to===to&&e.targetPort===targetPort&&e.id!==id)){notify('该输入端口已有连线。');return;}
+ }
+ const apply=(cond,label)=>{if(g.edges.some(e=>e.id!==id&&e.from===from&&(e.condition||'next')===cond))throw Error('该出口已有连线，请先选中并删除旧线。');change(q=>{const e={id:id??uid('edge'),from,to,condition:cond,label,...(targetPort?{targetPort}:{})};if(id)q.edges=q.edges.map(x=>x.id===id?e:x);else q.edges.push(e)})};
  if(src.type!=='gate'&&!id){try{apply('next','')}catch(e){notify(e.message)}return}
  modal('连接属性',`<p class="help">${esc(src.name)} → ${esc(dst.name)}</p><label class="label">流转条件<select name="condition" class="field">${Object.entries(conds).map(([k,v])=>opt(k,v,c)).join('')}</select></label>`+field('连线标签','label',old?.label??''),'保存连接',f=>apply(f.get('condition'),f.get('label').trim()||(src.type==='gate'?conds[f.get('condition')]:'') ))}
 function download(name,text,mime='application/json'){const url=URL.createObjectURL(new Blob([text],{type:mime}));const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),2000)}
@@ -576,11 +592,11 @@ function createTaskPreset(graph){
  let picker;
  modal('预设任务',`${field('任务名','presetName','','text','maxlength="80" required placeholder="例如：H2O 找物 · 整条序列"')}
  <label class="label">识别目标<select class="field" name="presetTask">${opt('objects','找物',defaultTask)}${opt('hands','找手',defaultTask)}</select></label>
- ${paramFields?'<div class="preset-parameters">'+paramFields+'</div>':''}${datasetFields}
+ ${promptField(graph)}${paramFields?'<div class="preset-parameters">'+paramFields+'</div>':''}${datasetFields}
  <label hidden data-preset-output><input type="hidden" name="out"></label>`,'保存预设任务',async values=>{
    const name=values.get('presetName').trim();
    if(!name)throw Error('请填写任务名。');
-   const snapshot=withVideoTask(clone(graph),form.elements.presetTask.value);
+   const snapshot=applyPrompt(withVideoTask(clone(graph),form.elements.presetTask.value),values);
    for(const {key,name,node} of settings){
      const target=snapshot.nodes.find(item=>item.id===node.id);
      target.config={...target.config,[key]:Number(values.get(name))};
@@ -638,6 +654,19 @@ function chooseTaskPreset(graph){
    if(!presets.length)summary.textContent='可用页面顶部的「预设任务」创建。';
  }).catch(err=>{if(form.isConnected)summary.textContent=err.message;});
 }
+function promptField(graph) {
+ const node=graph.nodes.find(n=>n.type==='prompt');
+ return node?field('要分割什么？','promptZh',node.config?.prompt_zh||'','text','maxlength="1000" placeholder="例如：右手拿着的黑色笔记本"'):'';
+}
+function applyPrompt(graph,values) {
+ const node=graph.nodes.find(n=>n.type==='prompt');
+ if(node){
+   const phrase=String(values.get('promptZh')||'').trim();
+   if(!phrase)throw Error('请填写要分割的目标。');
+   node.config={...node.config,prompt_zh:phrase};
+ }
+ return graph;
+}
 function start(fromDataset=false){
  const g=activeGraph(),issues=validateGraph(g);
  const presetButton=bridge?action('choose-preset','clock','使用预设任务','btn'):'';
@@ -649,7 +678,7 @@ function start(fromDataset=false){
  const allowRecords=localOK&&(!recordCode||directServer),allowLive=bridge&&(!(nativeCode||fusion)||directServer)&&supportsHandGraph(g);
  const allowDatasets=allowLive&&directServer;
  const modes=[['demo','流程演练','沿当前编排模拟节点和分支，不调用模型。'],...(allowRecords?[['records','处理 JSONL 数据',recordCode?'在 amax 上用已保存的 Python 处理输入记录，可导出结果。':'按算子配置处理输入记录，可导出结果。']]:[]),...(allowLive?[['live','服务器视频分割','在 DataFlow 服务器上统一处理找手或找物任务。']]:[])];
- const def=fromDataset&&allowDatasets?'live':allowRecords?'records':'demo';
+ const def=(fromDataset||g.id==='hand-seg'||g.nodes.some(n=>n.type==='prompt'))&&allowDatasets?'live':allowRecords?'records':'demo';
  const modeHelp=recordCode&&!localOK?'本图包含记录版 Python 和视频节点。要执行记录算子，请接入 JSONL 输入与输出。':(recordCode||nativeCode)&&!directServer?'执行自定义 Python 需要通过 amax 工作台连接。':!bridge&&!localOK?'通过服务器工作台或本机桥接可查看真实任务。':'';
  const sourceFields=allowDatasets?`${fusion?'<input type="hidden" name="sourceMode" value="dataset">':'<label class="label">输入来源<select name="sourceMode" class="field"><option value="dataset">选择服务器数据集</option><option value="manual">使用已有 JSONL 清单</option></select></label>'}${datasetFields}`:'';
  let picker,submitting=false,submittedSnapshot=null;
@@ -659,7 +688,7 @@ function start(fromDataset=false){
  const defaultOut=task=>videoOutputRoot+'/'+task+'/'+runFolder;
  const taskFields=allowLive?`${field('本次目标命令','videoTask',taskName(commandTask),'text','list="video-task-options" autocomplete="off" aria-describedby="video-task-help" maxlength="16"')}
  <datalist id="video-task-options"><option value="找手" label="与物体交互的手"></option><option value="找物" label="被手操作的物体"></option></datalist>
- <p class="help" id="video-task-help">输入「找手」或「找物」，用于本次提词和提示词改写。</p><p class="help" data-task-locked hidden>此队列统一使用上方命令。移除全部条目后可以切换。</p>`:'';
+ <p class="help" id="video-task-help">${g.nodes.some(n=>n.type==='prompt')?'找手 / 找物决定输出目录，实际分割目标由上面的中文描述指定。':'输入「找手」或「找物」，用于本次提词和提示词改写。'}</p><p class="help" data-task-locked hidden>此队列统一使用上方命令。移除全部条目后可以切换。</p>`:'';
  const reviewFields=nativeCode?`<div class="custom-code-confirm">
    <p class="help">本次使用带自定义 Python 的节点：${esc(nativeNodes.map(n=>n.name).join('、'))}。可在编排页打开对应节点的代码。</p>
    <label class="code-review"><input name="allowNativeCode" type="checkbox"><span>我已检查这些节点的代码，确认在 amax 上执行。</span></label>
@@ -668,7 +697,7 @@ function start(fromDataset=false){
  <div data-options="demo"><p class="help">演练只在页面模拟节点和分支。要处理视频，请选择「服务器视频分割」。</p>
  <label class="label">模拟质量门控结果<select name="scenario" class="field">${opt('pass','首轮通过 → 输出','pass')}${opt('retry','低分 → 改写并重分割 → 通过','')}${opt('review','转入待复核 → 输出','')}</select></label></div>
  <div data-options="records"><label class="label">输入 JSONL（每行一个对象）<textarea class="field" name="records" rows="4">{"text":"  DataFlow  "}&#10;{"text":"   "}</textarea></label></div>
- <div data-options="live">${taskFields}${sourceFields}<div data-manual>${field('服务器输入清单（绝对路径）','input','','text','placeholder="/…/input.jsonl"')}</div>${field('服务器新输出目录（绝对路径）','out',defaultOut(defaultTask))}<p class="help">启动后会使用 amax 的 GPU。启用 ABS 时会调用评分 API。</p>${reviewFields}</div>${modeHelp?`<p class="help">${esc(modeHelp)}</p>`:''}`,'确认启动',async f=>{
+ <div data-options="live">${promptField(g)}${taskFields}${sourceFields}<div data-manual>${field('服务器输入清单（绝对路径）','input','','text','placeholder="/…/input.jsonl"')}</div>${field('服务器新输出目录（绝对路径）','out',defaultOut(defaultTask))}<p class="help">启动后会使用 amax 的 GPU。启用 ABS 时会调用评分 API。</p>${reviewFields}</div>${modeHelp?`<p class="help">${esc(modeHelp)}</p>`:''}`,'确认启动',async f=>{
    if(submitting)throw Error('正在提交当前任务。');
    const mode=f.get('mode');let r;
    if(g!==activeGraph()&&JSON.stringify(g)!==JSON.stringify(activeGraph()))throw Error('流水线已修改，请重新打开启动窗口。');
@@ -683,7 +712,7 @@ function start(fromDataset=false){
      if(!out||(!useDataset&&!source.input))throw Error(useDataset?'请填写新的服务器输出目录。':'请填写输入清单和新输出目录。');
      submittedSnapshot=snap;submitting=true;form.inert=true;updateButton();
      try{
-       const runGraph=withVideoTask(snap,commandTask);
+       const runGraph=applyPrompt(withVideoTask(clone(snap),commandTask),f);
        const res=await fetch(source.datasets?'/api/queues':'/api/launch',{
          method:'POST',headers:{'Content-Type':'application/json'},
          body:JSON.stringify({graph:runGraph,...source,out,...(nativeCode?{allowNativeCode:true}:{})}),

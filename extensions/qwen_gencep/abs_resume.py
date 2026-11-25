@@ -99,13 +99,15 @@ def tail_manifest(out, prepared):
 
 
 def continue_run(plan):
-    out, source = Path(plan["out"]), Path(plan["input"])
+    public, source = Path(plan["out"]), Path(plan["input"])
+    compact = (public / ".run").is_dir()
+    out = public / ".run" if compact else public
     attempt, checkpoint = plan["resumeAttempt"], plan["checkpoint"]
     prior = plan["prior"]
     group = out / checkpoint["group"] if checkpoint["group"] else out
     fusion = "--workbench-fuse" in plan["flags"]
     flags = [flag for flag in plan["flags"] if flag != "--workbench-fuse"]
-    with run_progress.monitor_run(out, ["abs"], prior["mode"]) as progress:
+    with run_progress.monitor_run(public, ["abs"], prior["mode"]) as progress:
         progress.data["resumeAttempt"] = attempt
         progress.data["rounds"] = copy.deepcopy(prior["rounds"])
         progress.data["rounds"][-1]["stages"]["abs"] = {"status": "pending"}
@@ -178,7 +180,10 @@ def continue_run(plan):
             if group_name:
                 batch.merge_group_manifests([out / "first-part", out / "remaining-parts"], out)
             if fusion:
-                batch.finish_fusion(progress, out, prepared, flags)
+                report = batch.finish_fusion(progress, out, prepared, flags, delivery=public if compact else None)
+                if compact:
+                    from video_delivery import verify_delivered_work
+                    verify_delivered_work(public, report)
         finally:
             feedback.new_round, native.monitor_run = original_round, original_monitor
             sys.argv = argv
