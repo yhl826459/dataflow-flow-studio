@@ -1,4 +1,4 @@
-import { icon, types } from './model.js';
+import { icon, types, dualSegment, segmentPorts } from './model.js';
 
 const SVG = 'http://www.w3.org/2000/svg';
 const WIDTH = 174, HEIGHT = 72;
@@ -35,9 +35,9 @@ function svg(tag, attrs) {
   return el;
 }
 const clamp = (n, lo, hi) => Math.min(Math.max(n, lo), hi);
-function route(source, dest, peer, peers, nodes) {
+function route(source, dest, peer, peers, nodes, port) {
   const a = [source.x + WIDTH + 4, source.y + HEIGHT / 2];
-  const b = [dest.x - 7, dest.y + HEIGHT / 2];
+  const b = [dest.x - 7, dest.y + HEIGHT * (port==='rgb' ? .25 : port==='targets' ? .75 : .5)];
   const offset = (peer - (peers-1)/2) * 34;
   const gap = b[0] - a[0], sameRow = Math.abs(b[1] - a[1]) < HEIGHT;
   const crossesNode = sameRow && nodes.some(n => n !== source && n !== dest && n.x > a[0] && n.x < b[0] && Math.abs(n.y-source.y) < HEIGHT);
@@ -90,10 +90,12 @@ function glyph(key) {
 
 export function mountCanvas(host, opts) {
   const {graph, mode='edit', selected, states={}, activeEdges=[]} = opts;
-  const editable = mode !== 'monitor';
-  const running = !editable && opts.running === true;
+  const editable = mode === 'edit';
+  const monitoring = mode === 'monitor';
+  const running = monitoring && opts.running === true;
   const nodes = graph.nodes.map(n => ({...n, x:Number(n.x)||0, y:Number(n.y)||0}));
   const byId = new Map(nodes.map(n => [n.id,n]));
+  const dual=dualSegment(graph);
   const active = new Set(activeEdges);
   const key = opts.viewKey || graph.id || nodes.map(n=>n.id).join('|') || 'new';
   const uid = 'fcn'+(++serial);
@@ -107,7 +109,7 @@ export function mountCanvas(host, opts) {
   if (running) root.style.setProperty('--fc-phase', -(document.timeline.currentTime ?? performance.now())+'ms');
   root.tabIndex = 0;
   root.setAttribute('role','region');
-  root.setAttribute('aria-label',editable?'流水线编排画布':'运行监控画布');
+  root.setAttribute('aria-label',monitoring?'运行监控画布':'流水线编排画布');
   const world = html('div','fc-world');
   const wires = svg('svg',{class:'fc-wires','aria-label':'节点连接'});
   const defs = svg('defs',{});
@@ -213,15 +215,17 @@ export function mountCanvas(host, opts) {
     root.classList.add('fc-connecting'); nodeEls.get(id)?.classList.add('fc-origin');
     hint.textContent='选择目标节点的输入端口 · Esc 取消';
   }
-  function finishConnection(id) {
+  function finishConnection(id,port) {
     if(!connection || connection===id) return;
+    if(dual && byId.get(id)?.type==='prompt'){hint.textContent='中文目标描述由启动参数提供，无需接入视频。';return;}
+    if(id===dual?.id && !port){hint.textContent='请选择 RGB 视频或目标描述端口';return;}
     const start=connection; resetConnection();
-    opts.onConnect?.(start,id);
+    opts.onConnect?.(start,id,port);
   }
   function refreshLines() {
     for(const entry of edgeEls) {
       const {edge,peer,peers}=entry;
-      const geom=route(byId.get(edge.from),byId.get(edge.to),peer,peers,nodes); entry.geom=geom;
+      const geom=route(byId.get(edge.from),byId.get(edge.to),peer,peers,nodes,edge.targetPort); entry.geom=geom;
       const d=rounded(geom.points);
       entry.path.setAttribute('d',d); entry.hit.setAttribute('d',d);
       entry.flow?.setAttribute('d',d);
@@ -231,7 +235,7 @@ export function mountCanvas(host, opts) {
   }
   const edgeGroups=new Map();
   const incoming=new Map();
-  const edgeName=e=>'选择连线 '+byId.get(e.from).name+' 至 '+byId.get(e.to).name+(e.label?'，'+e.label:'');
+  const edgeName=e=>'选择连线 '+byId.get(e.from).name+' 至 '+byId.get(e.to).name+(e.targetPort?'，'+segmentPorts[e.targetPort]:'')+(e.label?'，'+e.label:'');
   graph.edges.forEach(e=>{
     if(!byId.has(e.from)||!byId.has(e.to)) return;
     if(running && states[e.to]==='running') incoming.set(e.to,(incoming.get(e.to)||0)+1);
@@ -242,7 +246,7 @@ export function mountCanvas(host, opts) {
   for(const group of edgeGroups.values()) for(const [i,edge] of group.entries()) {
     // A visited edge at a join may belong to an earlier retry round.
     const current=running && states[edge.to]==='running' &&
-      (opts.currentEdge!=null ? edge.id===opts.currentEdge : incoming.get(edge.to)===1 && active.has(edge.id));
+      (edge.targetPort ? active.has(edge.id) : opts.currentEdge!=null ? edge.id===opts.currentEdge : incoming.get(edge.to)===1 && active.has(edge.id));
     const g=svg('g',{class:'fc-edge'+(active.has(edge.id)||current?' fc-active':'')+(current?' fc-current':'')});
     g.dataset.condition=edge.condition || 'next';
     const path=svg('path',{class:'fc-edge-line',fill:'none','marker-end':'url(#'+uid+(active.has(edge.id)||current?'active':'base')+')'});
@@ -258,6 +262,10 @@ export function mountCanvas(host, opts) {
       listen(g,'keydown',ev=>{
         if(ev.key==='Enter'||ev.key===' ') { ev.preventDefault();edgeFocus(edge.id);selectedEdges.querySelector('button')?.focus(); }
       });
+    }else if(monitoring && edge.targetPort){
+      const description=segmentPorts[edge.targetPort]+(active.has(edge.id)?' · 已就绪':' · 等待输入');
+      g.setAttribute('role','img');g.setAttribute('aria-label',description);
+      const title=svg('title',{});title.textContent=description;g.append(title);
     }
     let label=null;
     if(edge.label) {
@@ -271,10 +279,16 @@ export function mountCanvas(host, opts) {
     edgeLayer.append(g);
     edgeEls.push({edge,g,path,hit,flow,label,peer:i,peers:group.length});
   }
-  function makePort(n,dir) {
+  function makePort(n,dir,key) {
     const port=html('button','fc-port fc-port-'+dir);
     port.type='button'; port.setAttribute('aria-label',n.name+(dir==='out'?' 输出端口':' 输入端口'));
     port.title=dir==='out'?'从此处连接':'连接到此处';
+    if(key){
+      port.dataset.port=key;
+      port.title=port.getAttribute('aria-label')+' · '+segmentPorts[key];
+      port.setAttribute('aria-label',n.name+' '+segmentPorts[key]+' 输入端口');
+      port.append(html('span','fc-port-label',segmentPorts[key]));
+    }
     if(!editable) {port.disabled=true;port.tabIndex=-1;return port;}
     listen(port,'pointerdown',ev=>{
       ev.stopPropagation();
@@ -285,7 +299,7 @@ export function mountCanvas(host, opts) {
     listen(port,'click',ev=>{
       ev.preventDefault();ev.stopPropagation();
       if(dir==='out') setConnection(n.id);
-      else if(connection) finishConnection(n.id);
+      else if(connection) finishConnection(n.id,key);
       else { hint.textContent='先选择来源节点的输出端口'; }
     });
     return port;
@@ -303,13 +317,16 @@ export function mountCanvas(host, opts) {
     const details=html('span','fc-node-details');
     const name=html('strong','',n.name||type.label||'算子');
     const state=states[n.id]||'waiting';
-    const sub=html('small','',editable?nodeSummary(n):state==='running'&&!running?'上次记录：执行中':(statusText[state]||'待执行'));
+    const sub=html('small','',!monitoring?nodeSummary(n):state==='running'&&!running?'上次记录：执行中':(statusText[state]||'待执行'));
     if(running && state==='running') node.classList.add('fc-executing');
     sub.title=sub.textContent;
-    if(!editable) {node.dataset.state=state;sub.prepend(html('i','fc-state-dot'));}
+    if(monitoring) {node.dataset.state=state;sub.prepend(html('i','fc-state-dot'));}
     details.append(name,sub);body.append(badge,details);
     node.append(body);
-    if(n.type!=='input') node.append(makePort(n,'in'));
+    if(n.id===dual?.id){
+      node.classList.add('fc-dual');
+      for(const key of Object.keys(segmentPorts)) node.append(makePort(n,'in',key));
+    }else if(n.type!=='input' && !(dual && n.type==='prompt')) node.append(makePort(n,'in'));
     if(n.type!=='output') node.append(makePort(n,'out'));
     listen(body,'pointerdown',ev=>{
       if(ev.button!==0||!editable||connection) return;
@@ -320,6 +337,7 @@ export function mountCanvas(host, opts) {
     listen(body,'click',ev=>{
       ev.stopPropagation();
       if(connection && n.type!=='input') {finishConnection(n.id);return;}
+      if(!editable && !monitoring) nodeEls.forEach((el,id)=>el.classList.toggle('fc-selected',id===n.id));
       edgeFocus();opts.onSelect?.(n.id);
     });
     listen(body,'keydown',ev=>{
@@ -377,9 +395,10 @@ export function mountCanvas(host, opts) {
     if(d.kind==='port') {
       if(!d.didMove) setConnection(d.n.id);
       else {
-        const el=document.elementFromPoint(ev.clientX,ev.clientY)?.closest('.fc-node');
+        const hit=document.elementFromPoint(ev.clientX,ev.clientY);
+        const el=hit?.closest('.fc-node');
         const dest=el&&nodes.find(n=>String(n.id)===el.dataset.nodeId);
-        if(dest && dest.type!=='input' && dest.id!==d.n.id) finishConnection(dest.id);
+        if(dest && dest.type!=='input' && dest.id!==d.n.id) finishConnection(dest.id,hit.closest('.fc-port-in')?.dataset.port);
         else resetConnection();
       }
     }
@@ -488,7 +507,8 @@ export function mountCanvas(host, opts) {
       body.title=n.name;
       body.setAttribute('aria-label','查看 '+n.name);
       body.querySelector('strong').textContent=n.name;
-      el.querySelector('.fc-port-in')?.setAttribute('aria-label',n.name+' 输入端口');
+      for(const port of el.querySelectorAll('.fc-port-in'))
+        port.setAttribute('aria-label',n.name+' '+(port.dataset.port?segmentPorts[port.dataset.port]+' ':'')+'输入端口');
       el.querySelector('.fc-port-out')?.setAttribute('aria-label',n.name+' 输出端口');
       for(const {edge,g} of edgeEls) {
         if(edge.from===n.id||edge.to===n.id) g.setAttribute('aria-label',edgeName(edge));

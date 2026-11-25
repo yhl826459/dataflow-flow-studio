@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Flow Studio · 只读工作台</title>
+  <link rel="stylesheet" href="./studio.css">
+  <link rel="stylesheet" href="./canvas.css">
+</head>
+<body>
+  <main class="content">
+    <header class="heading">
+      <div class="row"><span class="brandmark"><i></i></span><h1>Flow Studio</h1><span class="badge">只读</span></div>
+      <button type="button" class="btn" id="refresh">刷新</button>
+    </header>
+    <nav class="tabs" aria-label="工作台视图">
+      <button type="button" class="tab" id="pipelines-tab" aria-pressed="false">编排设计</button>
+      <button type="button" class="tab active" id="monitor-tab" aria-pressed="true">运行监控</button>
+      <button type="button" class="tab" id="queue-tab" aria-pressed="false">数据排队</button>
+    </nav>
+    <p class="caption" id="connection" role="status">正在读取 amax 任务…</p>
+    <section id="view"></section>
+  </main>
+  <script type="module" src="./shared-monitor.js"></script>
+</body>
+</html>

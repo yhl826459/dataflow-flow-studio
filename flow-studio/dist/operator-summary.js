@@ -4,6 +4,7 @@ import {canProcessRecords} from './records.js';
 export const summaryFields = [['input','输入'],['logic','处理逻辑'],['model','调用模型'],['output','输出']];
 
 const nativeModels = {
+  prompt: '使用工作台模型 API，默认沿用 ABS 的 gpt-6.2-sol。',
   qwen: '使用 Qwen3.8-27B-FP8，在 amax 本地从视频帧提取和复核目标短语。',
   refine: '使用 Qwen3.8-27B-FP8，在 amax 本地改写低分目标的提示词。',
   segment: '使用 GenCeption 14B，在 amax 本地分割；目标短语由 UMT5-XXL 编码。',
@@ -51,6 +52,8 @@ export function operatorSummary(type, config = {}, graph) {
         logic: '检查序列 ID 和视频，读取尺寸、帧数与帧率。',
         output: `带有视频信息（video_info）的${values.task === 'objects' ? '物体' : '手部'}任务记录。`
       };
+    case 'prompt':
+      return {input:'启动时填写的一条中文目标描述。',logic:'忠实翻译为一个英文目标短语；同次提交固定译文，所有窗口复用。',output:'targets：一个目标 ID 和英文短语，交给 GenCeption 编码。'};
     case 'qwen':
       return {
         input: 'RGB 视频和清单中指定的目标任务。',

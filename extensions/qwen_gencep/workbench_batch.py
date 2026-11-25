@@ -275,7 +275,7 @@ def merge_group_manifests(groups, out):
         tmp.replace(out / name)
 
 
-def finish_fusion(progress, out, source, flags):
+def finish_fusion(progress, out, source, flags, *, delivery=None):
     progress.data["rounds"][-1]["stages"]["fusion"] = {"status": "pending"}
 
     @operator_progress("fusion")
@@ -284,15 +284,27 @@ def finish_fusion(progress, out, source, flags):
         from mask_fusion import fuse_masks
         report_work(detail="匹配相邻窗口并导出全序列掩码")
         result = fuse_masks(out, source, refined="--refine" in flags)
+        report = None
+        if delivery is not None:
+            from video_delivery import publish_video
+            report_work(detail="生成全视频 RGB 与掩码对照")
+            report = publish_video(delivery, Path(result["path"]), source, delivery.name, flags)
+            from segment_delivery import remember_branches
+            remember_branches(progress.data["rounds"], report[1])
+            result["path"] = str(delivery)
         progress.data["fusion"] = result
         report_work(detail=f"{result['tracks']} 条轨迹 · {len(result['reviewSeams'])} 处接缝待复核")
+        return report
 
-    run()
+    return run()
 
 
 def workbench_main():
     args = list(sys.argv)
     fuse = "--workbench-fuse" in args
+    compact = "--workbench-compact" in args
+    if compact:
+        args.remove("--workbench-compact")
     if fuse:
         args.remove("--workbench-fuse")
         sys.argv = args.copy()
@@ -301,8 +313,15 @@ def workbench_main():
     rows = feedback.read_jsonl(source)
     if len(rows) <= 1 and not fuse:
         return native.main()
-    out = Path(args[output_index]).resolve()
-    out.mkdir(parents=True, mode=0o700)
+    public = Path(args[output_index]).resolve()
+    public.mkdir(parents=True, mode=0o700)
+    out = public / ".run" if compact else public
+    if compact:
+        # A single native pipeline creates its own output directory exclusively.
+        if len(rows) > 1:
+            out.mkdir(mode=0o700)
+        args[output_index] = str(out)
+        sys.argv = args.copy()
     groups = [out / "first-part", out / "remaining-parts"]
     saved_monitor, saved_new_round = native.monitor_run, feedback.new_round
     with ExitStack() as stack:
@@ -316,7 +335,7 @@ def workbench_main():
         def group_monitor(folder, stages, mode):
             nonlocal progress
             if progress is None:
-                progress = stack.enter_context(saved_monitor(out, stages, mode))
+                progress = stack.enter_context(saved_monitor(public, stages, mode))
                 progress.data["workbenchGroups"] = {}
             else:
                 progress.add_round(0, stages)
@@ -347,7 +366,10 @@ def workbench_main():
                     progress.save()
                 merge_group_manifests(groups, out)
             if fuse:
-                finish_fusion(progress, out, source, args)
+                report = finish_fusion(progress, out, source, args, delivery=public if compact else None)
+                if compact:
+                    from video_delivery import verify_delivered_work
+                    verify_delivered_work(public, report)
         finally:
             native.monitor_run, feedback.new_round = saved_monitor, saved_new_round
             sys.argv = args

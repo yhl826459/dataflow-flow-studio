@@ -30,9 +30,9 @@ DOCS = ROOT / ".local/pipeline-docs"
 TASK_PRESETS = ROOT / ".local/task-presets.json"
 LIBRARY_LIMIT = 4 * 1024 * 1024
 REMOTE = "/data/yanghonglei/DataFlow"
-STAGES = {"qwen": "qwen", "genception": "segment", "abs": "score", "gate": "gate", "refiner": "refine",
+STAGES = {"prompt": "prompt", "qwen": "qwen", "genception": "segment", "abs": "score", "gate": "gate", "refiner": "refine",
           "fusion": "fusion"}
-LABELS = {"input": "输入清单", "qwen": "Qwen 提词", "segment": "视频分割", "score": "ABS 评分",
+LABELS = {"prompt": "中文目标描述", "input": "输入清单", "qwen": "Qwen 提词", "segment": "视频分割", "score": "ABS 评分",
           "gate": "质量判断", "refine": "提示词改写", "fusion": "全视频掩码融合", "output": "运行结束"}
 EDGE_IDS = {("input", "qwen", "next"): "in-qwen", ("qwen", "segment", "next"): "qwen-segment",
             ("segment", "score", "next"): "segment-score", ("score", "gate", "next"): "score-gate",
@@ -53,6 +53,34 @@ def checked_output(path, root, task):
     if target == output or (output in target.parents and expected not in target.parents):
         raise ValueError(f"本次目标为 {task}，请在 {expected} 下指定新子目录。")
     return target
+
+
+def check_segment_ports(graph):
+    """Validate named dependencies while retaining untyped, serial v3 graphs."""
+    kinds = {n["id"]: n.get("type") for n in graph["nodes"] if isinstance(n, dict) and isinstance(n.get("id"), str)}
+    edges = graph["edges"]
+    if not all(isinstance(e, dict) and isinstance(e.get("from"), str) and isinstance(e.get("to"), str) for e in edges):
+        raise ValueError("连线格式无效。")
+    legacy = any(kinds.get(e["from"]) == "input" and kinds.get(e["to"]) == "prompt" for e in edges)
+    dual = ("prompt" in kinds.values() and "segment" in kinds.values()
+            and (not legacy or any("targetPort" in e for e in edges)))
+    bound = set()
+    for e in edges:
+        source, dest = kinds.get(e["from"]), kinds.get(e["to"])
+        if dual and dest == "segment":
+            port = {"input": "rgb", "prompt": "targets"}.get(source)
+            if not port or e.get("targetPort") != port or e.get("condition", "next") != "next":
+                raise ValueError("RGB 视频须连接视频输入，目标描述须连接中文目标描述。")
+            if port in bound:
+                raise ValueError("GenCeption 输入端口重复接线。")
+            bound.add(port)
+        elif "targetPort" in e or (dual and dest == "prompt"):
+            raise ValueError("命名端口只能连接 GenCeption 分割；中文目标描述是独立输入。")
+    if dual:
+        for key, label in (("rgb", "RGB 视频"), ("targets", "目标描述")):
+            if key not in bound:
+                raise ValueError(f"GenCeption 分割缺少「{label}」输入连线。")
+    return dual
 
 
 def compile_graph(graph, reviewed):
@@ -82,14 +110,18 @@ def compile_graph(graph, reviewed):
         if not isinstance(config, dict):
             raise ValueError("算子参数格式无效。")
         nodes[key] = config
-    config_keys = {"input": {"task"}, "qwen": {"sample_fps"}, "gate": {"threshold", "maxRetries"},
+    config_keys = {"prompt": {"prompt_zh"}, "input": {"task"}, "qwen": {"sample_fps"}, "gate": {"threshold", "maxRetries"},
                    "score": {"every"}}
     for name, config in nodes.items():
         if set(config) - config_keys.get(name, set()):
             raise ValueError(f"{LABELS[name]} 包含当前服务器入口不支持的参数。")
     feedback = "gate" in nodes or "refine" in nodes
     scoring = "score" in nodes
-    required = {"input", "qwen", "segment", "output"}
+    manual = "prompt" in nodes
+    provider = "prompt" if manual else "qwen"
+    if manual and (feedback or scoring):
+        raise ValueError("中文提示分割仅支持分割和可选的全视频融合。")
+    required = {"input", provider, "segment", "output"}
     if scoring:
         required.add("score")
     if feedback:
@@ -99,7 +131,8 @@ def compile_graph(graph, reviewed):
         required.add("fusion")
     if set(nodes) != required:
         raise ValueError("质量反馈需要分割、ABS、质量判断和改写算子。")
-    connections = {("input", "qwen", "next"), ("qwen", "segment", "next")}
+    dual = check_segment_ports(graph)
+    connections = {("input", "segment" if dual else provider, "next"), (provider, "segment", "next")}
     if feedback:
         connections = set(EDGE_IDS)
     elif scoring:
@@ -125,9 +158,14 @@ def compile_graph(graph, reviewed):
         raise ValueError("这张图的连线与服务器视频分割入口不匹配，可先运行演练。")
     if nodes["input"].get("task", "hands") not in ("hands", "objects"):
         raise ValueError("目标任务须选择找手（hands）或找物（objects）。")
-    if nodes["qwen"].get("sample_fps", 5) != 5:
+    if not manual and nodes["qwen"].get("sample_fps", 5) != 5:
         raise ValueError("服务器 Qwen 固定按 5 fps 采样。")
     args = []
+    if manual:
+        text = nodes["prompt"].get("prompt_zh", "")
+        if not isinstance(text, str) or len(text) > 1000 or any(ord(c) < 32 for c in text):
+            raise ValueError("中文目标描述需要是 1000 字以内的单行文本。")
+        args.append("--prompt-zh=" + text.strip())
     if scoring:
         every = nodes["score"].get("every", 6)
         if type(every) is not int or every < 1:
@@ -152,6 +190,8 @@ def compile_request(body):
         raise ValueError("请选择一条服务器序列或一个 JSONL 清单，并指定新输出目录。")
     graph = body.get("graph")
     args = compile_graph(graph, body.get("allowNativeCode"))
+    if "--prompt-zh=" in args:
+        raise ValueError("请填写要分割的中文目标描述。")
     if "input" in body and "--workbench-fuse" in args:
         raise ValueError("全视频掩码融合需要片段帧号，请从工作台选择服务器数据集。")
     for field in (("out", "input") if "input" in body else ("out",)):
@@ -196,8 +236,18 @@ def dataset_runtime_issues(root, flags, task):
     script = "experiment_hands.py" if task == "hands" else "experiment.py"
     needed = [root / ".venv/bin/python", home / "pipe_14b_v2.pkl",
               home / "umt5-xxl-encoder-bf16-dataflow/config.json",
-              home / "qwen38-fp8/.venv/bin/python", home / "qwen38-fp8" / script,
+              home / "qwen38-fp8/.venv/bin/python",
               home / ".venv-genception14b/bin/python"]
+    if any(flag.startswith("--prompt-zh=") for flag in flags):
+        from operator_agent import configuration
+        try:
+            provider = configuration(root)
+            if provider["needs_key"] and not os.environ.get(provider["key_env"]):
+                return [f"中文翻译需要服务环境变量 {provider['key_env']}。"]
+        except ValueError as exc:
+            return [str(exc)]
+    else:
+        needed.append(home / "qwen38-fp8" / script)
     if "--abs" in flags:
         needed.extend([home / "scoring_scripts/abs/local_score.py", home / "scoring_scripts/abs/api_config.json"])
     issues = [f"缺少服务器运行文件 {p}" for p in needed if not p.is_file()]
@@ -323,7 +373,10 @@ def submit_dataset_queue(server, body):
             name = re.sub(r"[^A-Za-z0-9_.-]+", "-", selection["id"].split("/")[-1]).strip(".-")[:70] or "sequence"
             leaf = f"{idx:03d}-{name}"
         used_names.add(leaf)
-        items.append(dict(dataset=choice, flags=payload["flags"], out=str(parent / leaf)))
+        flags = payload["flags"]
+        if any(flag.startswith("--prompt-zh=") for flag in flags):
+            flags = [*flags, "--translation-id=" + UUID(str(body.get("requestId"))).hex]
+        items.append(dict(dataset=choice, flags=flags, out=str(parent / leaf)))
 
     def preflight():
         if parent.exists():
@@ -358,7 +411,9 @@ def submit_resume(server, body):
         raise ValueError("原任务未启用 ABS 评分。")
     target = checked_output(state["output"], server.dataflow_root, graph_task(graph))
     candidate = state["resumeCandidate"]
-    folder = target / candidate["group"] if candidate["group"] else target
+    folder = runtime_folder(target)
+    if candidate["group"]:
+        folder = folder / candidate["group"]
     checkpoint = folder / "dataflow_step2.jsonl"
     item = dict(out=str(target), input=str(checkpoint), resumeAttempt=attempt.hex, flags=flags,
                 checkpoint=dict(candidate, sha256=sha256(checkpoint.read_bytes()).hexdigest()))
@@ -401,6 +456,8 @@ def remote_launch(payload):
         if not os.environ.get(key_name):
             raise ValueError("当前服务器进程环境未配置评分所需的密钥。请在服务器环境配置后重新启动。")
     identity = hashlib.sha256(str(target).encode()).hexdigest()[:32]
+    if any(flag.startswith("--prompt-zh=") for flag in flags) and not any(flag.startswith("--translation-id=") for flag in flags):
+        flags = [*flags, "--translation-id=" + identity]
     work = STATE / "workbench" / identity
     clean = dict(payload, input=str(source), out=str(target))
     signature = hashlib.sha256(json.dumps(clean, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
@@ -419,10 +476,25 @@ def remote_launch(payload):
     entry = "extensions/qwen_gencep/workbench_batch.py"
     if not dataset_runtime:
         flags = [*flags, "--workbench-manifest"]
+    elif payload["graph"]["id"] == "hand-seg" and "--workbench-fuse" in flags:
+        flags = [*flags, "--workbench-compact"]
     if any("implementation" in node for node in payload["graph"]["nodes"]):
         sys.path.insert(0, str(Path.cwd() / "flow-studio"))
-        from operator_sources import native_snapshot
-        snapshot = native_snapshot(Path.cwd(), payload["graph"]["nodes"])
+        from operator_sources import native_snapshot, source_for
+        nodes = []
+        for node in payload["graph"]["nodes"]:
+            impl = node.get("implementation")
+            if impl is not None:
+                base = source_for(Path.cwd(), node["type"], "native")
+                if (impl["kind"] == "native" and impl["baseHash"] == base["baseHash"] and
+                        impl["code"].rstrip("\r\n") == base["code"].rstrip("\r\n")):
+                    node = {k: v for k, v in node.items() if k != "implementation"}
+            nodes.append(node)
+        # The receipt describes what ran. An unchanged copy uses the batch operator
+        # and has the same checkpoint semantics as its built-in counterpart.
+        payload = dict(payload, graph=dict(payload["graph"], nodes=nodes))
+        if any("implementation" in node for node in nodes):
+            snapshot = native_snapshot(Path.cwd(), nodes)
     work.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     work.mkdir(mode=0o700)
     log = work / "launcher.log"
@@ -522,6 +594,11 @@ def prepared_clips(output, record=None):
         return []
 
 
+def runtime_folder(output):
+    hidden = output / ".run"
+    return hidden if hidden.is_dir() and not hidden.is_symlink() else output
+
+
 def resume_candidate(state, record):
     from pathlib import Path
 
@@ -533,7 +610,7 @@ def resume_candidate(state, record):
     step = rnd.get("stages", {}).get("abs", {})
     if rnd["number"] != 0 or step.get("status") != "failed":
         return None
-    root = Path(record["answer"]["output"]).resolve()
+    root = runtime_folder(Path(record["answer"]["output"]).resolve())
     group = rnd.get("group")
     if group not in (None, "first-part", "remaining-parts"):
         return None
@@ -582,7 +659,9 @@ def remote_resume(payload):
     expected = {key: candidate[key] for key in ("stateId", "group", "sequence")}
     if state.get("output") != str(out) or resume_candidate(state, record) != expected:
         raise ValueError("此任务已不符合 ABS 检查点续跑条件。")
-    group = out / candidate["group"] if candidate["group"] else out
+    group = runtime_folder(out)
+    if candidate["group"]:
+        group = group / candidate["group"]
     checkpoint = group / "dataflow_step2.jsonl"
     if hashlib.sha256(checkpoint.read_bytes()).hexdigest() != candidate["sha256"]:
         raise ValueError("分割检查点已改变，保留原任务。")
@@ -647,6 +726,7 @@ def remote_snapshots():
             continue
         receipts.pop(str(output), None)
         seen.add(str(output))
+        work = runtime_folder(output)
         try:
             source = next((output / n for n in ("input.jsonl", "abs_step1.jsonl", "dataflow_step2.jsonl")
                            if (output / n).is_file()), None)
@@ -660,11 +740,15 @@ def remote_snapshots():
             hidden += 1
             continue
         state["has_input"] = any((folder / "input.jsonl").is_file()
-                                 for folder in (output, output / "first-part", output / "remaining-parts"))
+                                 for folder in (work, work / "first-part", work / "remaining-parts"))
         if record:
             state["receipt"] = record
             state["clips"] = prepared_clips(output, record)
             state["resumeCandidate"] = resume_candidate(state, record)
+            if (output / "result.json").is_file() and (output / "mask_preview.mp4").is_file() and state.get("fusion"):
+                state["fusion"]["path"] = str(output)
+                state["hasPreview"] = True
+                state["has_input"] = True
         for rnd in state["rounds"]:
             for step in rnd["stages"].values():
                 if step["status"] == "failed":
@@ -672,7 +756,7 @@ def remote_snapshots():
                     for part in step.get("parts", {}).values():
                         if part["status"] == "failed":
                             part["reason"] = failure_reason(part.get("log"), output, step["reason"])
-            base = output / rnd["group"] if rnd.get("group") in ("first-part", "remaining-parts") else output
+            base = work / rnd["group"] if rnd.get("group") in ("first-part", "remaining-parts") else work
             segmented = base / "dataflow_step2.jsonl"
             if rnd["number"] == 0 and segmented.is_file():
                 try:
@@ -690,7 +774,7 @@ def remote_snapshots():
                 except (OSError, KeyError, ValueError, TypeError):
                     pass
             feedback = base / "refinement" / f"round_{rnd['number']:02d}"
-            evidence = set()
+            evidence = set(rnd.get("branches", []))
             file = next((feedback / n for n in ("feedback_step2.jsonl", "feedback_step1.jsonl")
                          if (feedback / n).is_file()), None)
             if file is not None:
@@ -734,6 +818,7 @@ def remote(operation, payload=None, *, dataflow_root=None):
               inspect.getsource(graph_task) + "\n" + inspect.getsource(checked_output) + "\n" +
               inspect.getsource(failure_reason) + "\n" +
               inspect.getsource(prepared_clips) + "\n" +
+              inspect.getsource(runtime_folder) + "\n" +
               inspect.getsource(resume_candidate) + "\n" +
               inspect.getsource(func) + "\ntry:\n print(json.dumps({'data': " + call +
               "}, ensure_ascii=True))\nexcept (OSError, ValueError, KeyError) as e:\n"
@@ -797,7 +882,7 @@ def clip_progress(state):
             for key, step in rnd["stages"].items():
                 if key not in STAGES:
                     continue
-                detail = step.get("parts", {}).get(name)
+                detail = step if key == "prompt" and step["status"] != "skipped" else step.get("parts", {}).get(name)
                 if not detail and step.get("sequence") == name:
                     detail = step
                 if (not detail and not rnd.get("group") and not step.get("parts") and
@@ -880,12 +965,22 @@ def convert(state):
                 if val["status"] == "failed" and reason:
                     message += f" · {reason}"
                 events.append({"time": stamp(val["finished"]), "nodeId": key, "message": message})
-        if state.get("has_input") and stages.get("qwen", {}).get("started"):
+        provider = "prompt" if stages.get("prompt", {}).get("started") else "qwen"
+        if ("input", "segment", "next") in edges and state.get("has_input"):
             states["input"] = "done"
-            mark("input", "qwen")
+            mark("input", "segment")
+            if stages.get("prompt", {}).get("status") == "done":
+                mark("prompt", "segment")
+                finished = stages["prompt"].get("finished")
+                if finished:
+                    events.append({"time": stamp(finished), "nodeId": "segment",
+                                   "message": f"{group_label}GenCeption 分割 · RGB 视频与目标描述均已就绪"})
+        elif state.get("has_input") and stages.get(provider, {}).get("started"):
+            states["input"] = "done"
+            mark("input", provider)
         if num and previous.get("refine", {}).get("worked") and stages.get("segment", {}).get("started"):
             mark("refine", "segment")
-        for a, b in (("qwen", "segment"), ("segment", "score"), ("score", "gate")):
+        for a, b in ((provider, "segment"), ("segment", "score"), ("score", "gate")):
             if stages.get(a, {}).get("status") == "done" and stages.get(b, {}).get("started"):
                 mark(a, b)
         for branch in rnd.get("branches", []):
@@ -905,9 +1000,10 @@ def convert(state):
         for key in ("fusion", "score", "segment"):
             if states.get(key) == "done":
                 mark(key, "output")
-    if "fusion" in states and "gate" not in states:
+    if states.get("fusion") in ("running", "done") and states.get("gate") in (None, "skipped"):
         for key in ("score", "segment"):
-            mark(key, "fusion")
+            if states.get(key) == "done":
+                mark(key, "fusion")
     events.insert(0, {"time": start, "nodeId": "input", "message": "服务器已接收启动请求" if record else "服务器记录开始"})
     if end:
         desc = {"completed": "完成", "failed": "失败", "interrupted": "中断"}.get(status, "结束")
@@ -927,10 +1023,19 @@ def convert(state):
               "enabledTypes": sorted(enabled), "output": state["output"],
               "currentActivity": location, "clips": clip_progress(state),
               "round": state["rounds"][-1]["number"] if state["rounds"] else None}
+    clips_by_id = {c["id"]: c for c in state.get("clips", [])}
+    result["absScores"] = []
+    for rnd in state["rounds"]:
+        for sequence, scores in rnd["stages"].get("abs", {}).get("scoresByClip", {}).items():
+            clip = clips_by_id.get(sequence, {})
+            result["absScores"].append(dict(part=clip.get("index"), sequence=sequence,
+                                            firstFrame=clip.get("firstFrame"), round=rnd["number"], targets=scores))
     if "fusion" in state:
         result["fusion"] = state["fusion"]
     if graph:
         result.update(graph=graph, version=graph.get("version"), log=record["answer"]["log"], task=graph_task(graph))
+        if state.get("hasPreview") and status == "completed":
+            result["hasPreview"] = True
         if "dataset" in record:
             result["dataset"] = record["dataset"]
         if state.get("resumeCandidate"):
@@ -949,7 +1054,7 @@ def validate_library(data):
         if not isinstance(obj, dict) or set(obj) - allowed:
             raise ValueError("目录含有不支持的字段，请只保存编排定义。")
     def settings(config):
-        fields(config, {"task", "sample_fps", "every", "threshold", "maxRetries", "sourceKey",
+        fields(config, {"prompt_zh", "task", "sample_fps", "every", "threshold", "maxRetries", "sourceKey",
                         "targetKey", "operation", "key", "rule", "value"})
         if any(v is not None and type(v) not in (str, int, float, bool) for v in config.values()):
             raise ValueError("算子参数应为简单值。")
@@ -978,7 +1083,9 @@ def validate_library(data):
                 from operator_sources import implementation_shape
                 implementation_shape(node.get("type"), node["implementation"])
         for edge in graph["edges"]:
-            fields(edge, {"id", "from", "to", "condition", "label"})
+            fields(edge, {"id", "from", "to", "condition", "label", "targetPort"})
+    for graph in data["graphs"]:
+        check_segment_ports(graph)
     for item in data["custom"]:
         fields(item, {"id", "name", "type", "config", "implementation", "savedAt", "notes"})
         operator_metadata(item)
@@ -1113,7 +1220,7 @@ def latest_preset_graph(fallback, browser=None):
 
 def preset_overrides(current, preset):
     configs = {node["type"]: node.get("config", {}) for node in preset["nodes"]}
-    keys = {"input": "task", "score": "every", "gate": "threshold"}
+    keys = {"prompt": "prompt_zh", "input": "task", "score": "every", "gate": "threshold"}
     nodes = []
     for node in current["nodes"]:
         key = keys.get(node["type"])
@@ -1195,12 +1302,71 @@ class Handler(SimpleHTTPRequestHandler):
             return False
         return True
 
+    def run_preview(self, run_id):
+        if self.server.dataflow_root is None or not re.fullmatch(r"launch-[a-f0-9]{32}", run_id):
+            return self.send_json(404, {"error": "没有可播放的对照视频。"})
+        identity = run_id.removeprefix("launch-")
+        try:
+            receipt = Path.home() / ".local/state/dataflow-qwen-gencep/workbench" / identity / "launch.json"
+            graph_run = json.loads(receipt.read_text(encoding="utf-8"))
+            root = checked_output(graph_run["answer"]["output"], self.server.dataflow_root,
+                                  graph_task(graph_run["graph"]))
+            if (sha256(str(root).encode()).hexdigest()[:32] != identity
+                    or graph_run["graph"]["id"] != "hand-seg" or not (root / "result.json").is_file()):
+                raise ValueError()
+            video = root / "mask_preview.mp4"
+            if video.is_symlink() or not video.is_file():
+                raise ValueError()
+            stream = video.open("rb")
+        except (OSError, KeyError, ValueError):
+            return self.send_json(404, {"error": "没有可播放的对照视频。"})
+        with stream:
+            size = os.fstat(stream.fileno()).st_size
+            start, end = 0, size - 1
+            byte_range = self.headers.get("Range")
+            if byte_range:
+                match = re.fullmatch(r"bytes=(\d{1,18})?-(\d{1,18})?", byte_range)
+                if match and match[1]:
+                    start = int(match[1])
+                    end = min(end, int(match[2])) if match[2] else end
+                elif match and match[2] and int(match[2]):
+                    start = max(0, size - int(match[2]))
+                else:
+                    start = size
+                if start > end:
+                    self.send_response(416)
+                    self.send_header("Content-Range", f"bytes */{size}")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+            length = end - start + 1
+            self.send_response(206 if byte_range else 200)
+            self.send_header("Content-Type", "video/mp4")
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Cache-Control", "private, no-store")
+            self.send_header("Content-Length", str(length))
+            if byte_range:
+                self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+            self.end_headers()
+            stream.seek(start)
+            try:
+                while length:
+                    block = stream.read(min(length, 256 * 1024))
+                    if not block:
+                        break
+                    self.wfile.write(block)
+                    length -= len(block)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
     def do_GET(self):
         if not self.local_request():
             return
         url = urlsplit(self.path)
         path = url.path
-        if path == "/api/bridge":
+        if path == "/api/run-preview":
+            self.run_preview(parse_qs(url.query).get("id", [""])[0])
+        elif path == "/api/bridge":
             root = self.server.dataflow_root
             direct = root is not None
             from abs_transport import relay_listening

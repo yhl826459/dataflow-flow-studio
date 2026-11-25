@@ -63,6 +63,9 @@ export const types = {
   qwen: {label:'Qwen 提词', icon:'sparkles', color:'#8061B2', description:'从有序 RGB 帧中识别目标并复核描述短语。', fields:[
     {key:'sample_fps', label:'抽样帧率（fps）', type:'number', min:1, max:30, step:1, default:5}
   ]},
+  prompt: {label:'中文目标描述', icon:'edit', color:'#8061B2', description:'把本次填写的目标翻译为英文描述，同一次提交的各窗口共用。', fields:[
+    {key:'prompt_zh', label:'默认中文描述（启动时可填）', type:'text', optional:true, default:''}
+  ]},
   segment: {label:'GenCeption 分割', icon:'scan', color:'#137F73', description:'为每个目标短语分别生成逐帧二值掩码。', fields:[]},
   score: {label:'ABS 评分', icon:'activity', color:'#B3702E', description:'在采样帧上评价各实例的局部掩码质量。', fields:[
     {key:'every', label:'采样间隔（帧）', type:'number', min:1, step:1, default:6}
@@ -159,6 +162,37 @@ function checkConfig(node) {
   return errors;
 }
 
+export const segmentPorts = {rgb:'RGB 视频',targets:'目标描述'};
+
+export function dualSegment(graph) {
+  const prompt = graph.nodes.find(n => n?.type === 'prompt');
+  const segment = graph.nodes.find(n => n?.type === 'segment');
+  if (!prompt || !segment) return null;
+  const input = graph.nodes.find(n => n?.type === 'input');
+  // Frozen runs and old presets carry the original input -> prompt chain.
+  const legacy = graph.edges.some(e => e?.from === input?.id && e?.to === prompt.id);
+  return !legacy || graph.edges.some(e => e && Object.hasOwn(e,'targetPort')) ? segment : null;
+}
+
+export function portIssues(graph) {
+  const segment=dualSegment(graph), issues=[], bound=new Set();
+  const sources=new Map(graph.nodes.map(n=>[n?.id,n?.type]));
+  for(const e of graph.edges){
+    if(!e)continue;
+    if(segment && e.to===segment.id){
+      const required={input:'rgb',prompt:'targets'}[sources.get(e.from)];
+      if(!required || required!==e.targetPort || (e.condition||'next')!=='next')
+        issues.push({edgeId:e.id,message:'RGB 视频须连接视频输入，目标描述须连接中文目标描述。'});
+      else if(bound.has(required))issues.push({edgeId:e.id,message:'「'+segmentPorts[required]+'」输入端口重复接线。'});
+      else bound.add(required);
+    }else if(Object.hasOwn(e,'targetPort') || (segment && sources.get(e.to)==='prompt'))
+      issues.push({edgeId:e.id,message:'中文目标描述独立取自启动参数，命名输入端口仅用于 GenCeption 分割。'});
+  }
+  if(segment)for(const [key,label] of Object.entries(segmentPorts))if(!bound.has(key))
+    issues.push({nodeId:segment.id,message:'GenCeption 分割缺少「'+label+'」输入连线。'});
+  return issues;
+}
+
 export function graphIssues(graph) {
   const issues = [];
   const add = (message, nodeId, edgeId) => issues.push({message, nodeId, edgeId});
@@ -216,7 +250,8 @@ export function graphIssues(graph) {
     }
   }
   if (inputs.length === 1) {
-    const seen = reachable([inputs[0].id],outgoing);
+    const roots = dualSegment(graph) ? [inputs[0].id,...graph.nodes.filter(n=>n?.type==='prompt').map(n=>n.id)] : [inputs[0].id];
+    const seen = reachable(roots,outgoing);
     for (const node of byId.values()) if (!seen.has(node.id)) add('从输入无法到达「' + node.name + '」',node.id);
   }
   if (outputs.length) {
@@ -232,7 +267,7 @@ export function graphIssues(graph) {
     }
   }
   if (queue.length !== byId.size) add('仅质量门控的「重试」支路可以形成循环');
-  return issues;
+  return issues.concat(portIssues(graph));
 }
 
 export function validateGraph(graph) {
@@ -290,11 +325,16 @@ export function advanceRun(run) {
   const dest = edge && run.graph.nodes.find(n => n.id === edge.to);
   if (!dest) return finish('failed','演练已停止，找不到「' + routeNames[condition] + '」的后续节点');
   next.nodeStates[node.id] = 'done';
-  next.nodeStates[dest.id] = 'running';
-  next.current = dest.id;
+  let ready=dest;
+  if(edge.targetPort==='rgb'){
+    ready=run.graph.nodes.find(n=>n.type==='prompt');
+  }
+  next.nodeStates[ready.id] = 'running';
+  next.current = ready.id;
   next.activeEdge = edge.id;
   if (!next.activeEdges.includes(edge.id)) next.activeEdges.push(edge.id);
   const branch = node.type === 'gate' ? ' · ' + routeNames[condition] : '';
-  next.events.push({time:now,nodeId:dest.id,edgeId:edge.id,condition,message:node.name + branch + ' → ' + dest.name});
+  next.events.push({time:now,nodeId:dest.id,edgeId:edge.id,condition,message:node.name + branch + ' → ' + dest.name +
+    (edge.targetPort?' · '+segmentPorts[edge.targetPort]+'就绪':'')});
   return next;
 }
